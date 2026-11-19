@@ -1,259 +1,303 @@
 #!/bin/bash
-# Collaplex 音效 — 把链路固化装到 PipeWire(用户级)
+# Collaplex RT —— 把实时链路装到用户级 PipeWire 并切默认输出
 #
-#   链路: 全局音频(应用输出) -> collaplex_vsink(虚拟声卡)
-#         -> 响度归一化(pipe DSP) -> collaplex_hrtf_in(双耳 HRTF + 房间混响)
-#         -> 32 段 EQ -> [可选] 单声道混合 -> 输出设备
-#
-#   单声道混合(40-collaplex-mono.conf)只给"模拟/单声道设备"部署: 面板里给某台设备
-#   勾了「单声道混合」, 末段就接成 eq_out -> collaplex_mono_in -> 混合 -> 设备。
-#
-# 装什么:
-#   $HOME/.local/bin/collaplex-loudness-norm            pipe 插件入口(指向本项目 dsp/)
-#   $HOME/.config/pipewire/pipewire.conf.d/10-...conf   虚拟声卡 + 响度归一化
-#   $HOME/.config/pipewire/pipewire.conf.d/20-...conf   HRTF 核心(接入 + 输出)
-#   $HOME/.config/pipewire/pipewire.conf.d/40-...conf   单声道混合(仅单声道设备)
-#
-# 湿量: WET=0.3 环境变量覆盖(默认 0.3)
+#   应用 → collaplex_rt_sink（虚拟声卡）
+#        → HRTF(FL/FR) + 影院房间 IR（PipeWire convolver）
+#        → collaplex_dsp_in → Rust DSP（搁架/8:2/AGC/限幅）→ 硬件输出
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CONF_DIR="$HOME/.config/pipewire/pipewire.conf.d"
-WRAPPER="$HOME/.local/bin/collaplex-loudness-norm"
-WET="${WET:-0.3}"
-HRTF_IN="collaplex_hrtf_in"
-EQ_IN="collaplex_eq_in"
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/pipewire/pipewire.conf.d"
+STATE_DIR="$HOME/.local/state/collaplex-rt"
+BIN_DIR="$HOME/.local/bin"
+WRAPPER="$BIN_DIR/collaplex-rt-dsp"
+GAP="$BIN_DIR/collaplex-rt-gap"
+GAP_R="$BIN_DIR/collaplex-rt-gap-r"
+BIN="$BIN_DIR/collaplex-realtime-bin"
+ASSETS="$ROOT/assets"
+
+# 链路激活 / 待命共用函数
+. "$ROOT/scripts/chain-lib.sh"
+
+# DSP 参数（可在命令行用环境变量覆盖）
+SHELF_DB="${SHELF_DB:-8}"
+SHELF_FREQ="${SHELF_FREQ:-250}"
+SHELF_S="${SHELF_S:-1.79}"
+BAL_L_DB="${BAL_L_DB:-3.01}"
+BAL_R_DB="${BAL_R_DB:--3.01}"
+MONO="${MONO:-auto}"
 MONO_IN="collaplex_mono_in"
-# 解释器: 默认用项目 venv(自带 scipy、版本可控); deb 安装场景没有 venv, 退回系统 python3
-PY="${PY:-$ROOT/.venv/bin/python}"
-[ -x "$PY" ] || PY=/usr/bin/python3
 
-# ---- 1. 探测输出设备 ----
-# 优先用**记住的选择**(面板按钮/上次 start 落盘的 output.json) —— 设备名跨重插是稳定的
-# (含 USB 序列号), 所以"现在不在位"也照样先按它建链, 设备一插上由面板守护自动挂上。
-# 没记忆过就照旧: 先找数字输出(iec958), 再退到任意硬件输出。
-TARGET_INFO=$(/usr/bin/python3 - "$ROOT/web" <<'PY'
-import sys
-import time
-
-sys.path.insert(0, sys.argv[1])
-
-import output_route  # noqa: E402
-
-chosen = output_route.saved()
-sinks = output_route.hardware_sinks()
-desc_of = {d["name"]: d["description"] for d in sinks}
-target = chosen["node_name"]
-if not target:
-    for d in sinks:
-        if "iec958" in d["name"] or "digital" in d["name"].lower():
-            target = d["name"]
-            break
-    if not target and sinks:
-        target = sinks[0]["name"]
-if target.startswith("bluez_output."):
-    # 蓝牙常被 HFP(通话, 8/16 kHz)占着 —— 先切回 a2dp, 切完节点名可能变, 重新对一次
-    switched, info = output_route.prefer_a2dp(target)
-    if info:
-        print(info, file=sys.stderr)
-    if switched:
-        time.sleep(1.5)
-        sinks = output_route.hardware_sinks()
-        desc_of = {d["name"]: d["description"] for d in sinks}
-        real = output_route.resolve_device(target)
-        if real and real != target:
-            print("节点名跟着变了: %s → %s" % (target, real), file=sys.stderr)
-            target = real
-if not target:
-    print("\t\t")
-    raise SystemExit
-desc = desc_of.get(target, "")
-output_route.save(target, desc)          # 落盘: 面板守护与下次 start 共用这一份选择
-present = bool(output_route.resolve_device(target))   # 蓝牙两种写法/尾部序号也算在位
-mode = "mono" if output_route.mono_pref(target) else "stereo"
-print("%s\t%s\t%s\t%s" % (target, desc, "在位" if present else "不在位", mode))
+sink_channels() {
+    /usr/bin/python3 - "$1" <<'PY'
+import json, subprocess, sys
+name = sys.argv[1]
+try:
+    d = json.loads(subprocess.check_output(["pw-dump"], stderr=subprocess.DEVNULL))
+except Exception:
+    print(""); raise SystemExit
+for n in d:
+    if n.get("type") != "PipeWire:Interface:Node":
+        continue
+    p = n.get("info", {}).get("props", {})
+    if p.get("node.name") == name:
+        print(p.get("audio.channels", ""))
+        break
 PY
-)
-TARGET=$(printf '%s' "$TARGET_INFO" | cut -f1)
-TARGET_DESC=$(printf '%s' "$TARGET_INFO" | cut -f2)
-TARGET_STATE=$(printf '%s' "$TARGET_INFO" | cut -f3)
-MODE=$(printf '%s' "$TARGET_INFO" | cut -f4)
-# 末段接哪个节点: 单声道设备接混合级, 立体声设备直连
-if [ "$MODE" = "mono" ]; then EQ_TARGET="$MONO_IN"; else EQ_TARGET="$TARGET"; fi
-if [ -z "$TARGET" ]; then
-    echo "找不到任何输出设备, 也没有记住的选择 —— 先把耳机/声卡接上再 start"
+}
+
+linked() {
+    /usr/bin/python3 - "$1" "$2" <<'PY'
+import json, subprocess, sys
+out_name, tgt_name = sys.argv[1], sys.argv[2]
+try:
+    d = json.loads(subprocess.check_output(["pw-dump"], stderr=subprocess.DEVNULL))
+except Exception:
+    print(0); raise SystemExit
+ids = {}
+links = []
+for n in d:
+    t = n.get("type")
+    p = n.get("info", {}).get("props", {})
+    if t == "PipeWire:Interface:Node":
+        ids[p.get("node.name", "")] = n.get("id")
+    elif t == "PipeWire:Interface:Link":
+        links.append(p)
+oid = ids.get(out_name)
+tid = ids.get(tgt_name)
+print(1 if oid and tid and any(l.get("link.output.node") == oid and l.get("link.input.node") == tid for l in links) else 0)
+PY
+}
+
+rollback() {
+    rm -f "$CONF_DIR/10-rt-hrtf.conf" "$CONF_DIR/20-rt-dsp.conf" "$CONF_DIR/30-rt-mono.conf" "$CONF_DIR/91-rt-clock.conf"
+    for p in /proc/[0-9]*; do
+        [ -r "$p/cmdline" ] || continue
+        c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null) || continue
+        case "$c" in *collaplex-realtime-bin*|*target/release/collaplex-realtime*) kill -9 "${p#/proc/}" 2>/dev/null || true;; esac
+    done
+    rm -f /dev/shm/collaplex-rt-agc /dev/shm/collaplex-rt-agc.lock* /dev/shm/collaplex-rt-gap /dev/shm/collaplex-rt-ctl /dev/shm/collaplex-rt-scope
+    systemctl --user restart pipewire pipewire-pulse wireplumber
+    sleep 2
+}
+AGC_INIT_DB="${AGC_INIT_DB:--18}"
+AGC="${AGC:-1}"
+AGC_CEIL="${AGC_CEIL:--18.5}"
+AGC_DZ="${AGC_DZ:-2}"
+AGC_TAU_DOWN="${AGC_TAU_DOWN:-0.15}"
+AGC_TAU_UP="${AGC_TAU_UP:-1.5}"
+AGC_DET_TAU="${AGC_DET_TAU:-1.0}"
+AGC_BOOST="${AGC_BOOST:-12}"
+AGC_CUT="${AGC_CUT:-18}"
+AGC_UP_RATE="${AGC_UP_RATE:-6.0}"
+AGC_DOWN_S="${AGC_DOWN_S:-0.08}"
+AGC_SILENCE_RELEASE="${AGC_SILENCE_RELEASE:-1.5}"
+AGC_GATE="${AGC_GATE:--70}"
+AGC_ACTIVATE="${AGC_ACTIVATE:--50}"
+AGC_HYST="${AGC_HYST:-3}"
+AGC_MODE="${AGC_MODE:-clip}"
+CLIP_MEASURE_S="${CLIP_MEASURE_S:-0.6}"
+CLIP_BOUNDARY_MS="${CLIP_BOUNDARY_MS:-300}"
+CLIP_BOUNDARY_LUFS="${CLIP_BOUNDARY_LUFS:--60}"
+CLIP_RECHECK_S="${CLIP_RECHECK_S:-0}"
+VERIFY_DELAY_S="${VERIFY_DELAY_S:-1.3}"
+VERIFY_RAMP_S="${VERIFY_RAMP_S:-2.0}"
+VERIFY_DZ="${VERIFY_DZ:-0.5}"
+DRY_TRANSFER_INIT="${DRY_TRANSFER_INIT:--3.0}"
+LIMIT_CEIL="${LIMIT_CEIL:-0.891}"
+GAP_DBFS="${GAP_DBFS:--50}"
+GAP_MS="${GAP_MS:-200}"
+CX_DEBUG="${CX_DEBUG:-0}"
+
+[ -x "$ROOT/target/release/collaplex-realtime" ] || {
+    echo "先构建: cargo build --release" >&2
     exit 1
+}
+
+mkdir -p "$CONF_DIR" "$STATE_DIR" "$BIN_DIR"
+
+# ---- 1. 目标硬件 sink ----
+pick_target() {
+    if [ -n "${TARGET:-}" ]; then printf '%s' "$TARGET"; return; fi
+    if [ -s "$STATE_DIR/target" ]; then cat "$STATE_DIR/target"; return; fi
+    /usr/bin/python3 - <<'PY'
+import json, subprocess
+try:
+    data = json.loads(subprocess.check_output(["pw-dump"], stderr=subprocess.DEVNULL))
+except Exception:
+    print(""); raise SystemExit
+sinks = []
+for n in data:
+    if n.get("type") != "PipeWire:Interface:Node":
+        continue
+    p = n.get("info", {}).get("props", {})
+    if p.get("media.class") != "Audio/Sink":
+        continue
+    name = p.get("node.name", "")
+    if "collaplex" in name:
+        continue
+    sinks.append(name)
+pref = [s for s in sinks if "iec958" in s or "usb" in s.lower()]
+print((pref or sinks or [""])[0])
+PY
+}
+
+TARGET_NAME="$(pick_target)"
+if [ -z "$TARGET_NAME" ]; then
+    echo "找不到硬件输出 sink；软件照常启动，链路待命（接上设备后自动激活）" >&2
+    mkdir -p "$STATE_DIR"
+    printf 'waiting\n' > "$STATE_DIR/chain-state"
+    exit 0
 fi
-echo "输出设备: $TARGET (${TARGET_DESC:-未知}) [$TARGET_STATE]"
+echo "输出设备: $TARGET_NAME"
+CH=$(sink_channels "$TARGET_NAME")
+if [ -n "$CH" ]; then
+    TARGET_PRESENT=1
+else
+    TARGET_PRESENT=0
+fi
+printf '%s' "$TARGET_NAME" > "$STATE_DIR/target"
+if [ "$MONO" = "1" ]; then MODE=mono
+elif [ "$MONO" = "0" ]; then MODE=stereo
+elif [ "$CH" = "1" ]; then MODE=mono
+else MODE=stereo
+fi
+EQ_TARGET="$TARGET_NAME"
+[ "$MODE" = "mono" ] && EQ_TARGET="$MONO_IN"
 if [ "$MODE" = "mono" ]; then
-    echo "  输出模式: 单声道混合(模拟/单声道设备) —— 末段经 collaplex_mono_in"
+    echo "  输出模式: 单声道混合（模拟设备）"
 else
     echo "  输出模式: 立体声直连"
 fi
-if [ "$TARGET_STATE" != "在位" ]; then
-    echo "  ★ 设备当前不在位: 链路先建好, 设备一出现由面板守护(output_route)自动挂上, 不用重启"
-fi
-
-# ---- 2. 部署 pipe 插件入口(必须 ASCII 路径) ----
-mkdir -p "$(dirname "$WRAPPER")"
-sed -e "s|__PY__|$PY|" -e "s|__DSP__|$ROOT/dsp/loudness_norm.py|" "$ROOT/bin/collaplex-loudness-norm" > "$WRAPPER"
-sed -e "s|__PY__|$PY|" -e "s|__DSP__|$ROOT/dsp/eq.py|" \
-    -e "s|__REVERB__|$ROOT/reverb/room-ir-96k.wav|" \
-    "$ROOT/bin/collaplex-eq" > "$HOME/.local/bin/collaplex-eq"
-chmod 755 "$WRAPPER" "$HOME/.local/bin/collaplex-eq"
-echo "已装入口: $WRAPPER / $HOME/.local/bin/collaplex-eq"
-
-# ---- 3. 渲染两份配置 ----
-mkdir -p "$CONF_DIR"
-sed -e "s|__WRAPPER__|$WRAPPER|" -e "s|__HRTF_IN__|$HRTF_IN|" \
-    "$ROOT/pipewire/10-collaplex-vsink.conf" > "$CONF_DIR/10-collaplex-vsink.conf"
-sed -e "s|__HRIR__|$ROOT/hrir|" -e "s|__REVERB__|$ROOT/reverb/room-ir-96k.wav|" \
-    -e "s|__EQ_IN__|$EQ_IN|" -e "s|__WET__|$WET|" -e "s|__WET_WRAPPER__|$HOME/.local/bin/collaplex-wet|" \
-    "$ROOT/pipewire/20-collaplex-hrtf.conf" > "$CONF_DIR/20-collaplex-hrtf.conf"
-sed -e "s|__PY__|$PY|" -e "s|__DSP__|$ROOT/dsp/wet_gain.py|" \
-    "$ROOT/bin/collaplex-wet" > "$HOME/.local/bin/collaplex-wet"
-chmod 755 "$HOME/.local/bin/collaplex-wet"
-sed -e "s|__EQ_WRAPPER__|$HOME/.local/bin/collaplex-eq|" -e "s|__WET_WRAPPER__|$HOME/.local/bin/collaplex-wet|" -e "s|__TARGET__|$EQ_TARGET|" \
-    "$ROOT/pipewire/30-collaplex-eq.conf" > "$CONF_DIR/30-collaplex-eq.conf"
-# 单声道混合级: 只在单声道设备上部署; 换回立体声设备时把旧文件删掉(不然节点还挂着)
-if [ "$MODE" = "mono" ]; then
-    sed -e "s|__TARGET__|$TARGET|" \
-        "$ROOT/pipewire/40-collaplex-mono.conf" > "$CONF_DIR/40-collaplex-mono.conf"
+if [ "$TARGET_PRESENT" = 1 ]; then
+    echo "  目标设备在位"
 else
-    rm -f "$CONF_DIR/40-collaplex-mono.conf"
+    echo "  目标设备不在位：链路待命，接上后自动激活"
 fi
-cp "$ROOT/pipewire/91-collaplex-clock.conf" "$CONF_DIR/91-clock.conf"
-# 共享内存不存在时写入默认参数(全平直 / 0 dB / 湿量 0.3); 已存在则保留用户当前设置
-if [ ! -f /dev/shm/collaplex-eq ]; then
-    "$PY" "$ROOT/dsp/bootstrap.py"
-fi
-echo "已装配置: 10-collaplex-vsink.conf / 20-collaplex-hrtf.conf(混响湿量 $WET) / 30-collaplex-eq.conf"
-if [ "$MODE" = "mono" ]; then
-    echo "          + 40-collaplex-mono.conf(单声道混合: 开)"
-else
-    echo "          (单声道混合: 关)"
-fi
+BAL_L_MULT=$(LC_ALL=C awk "BEGIN{printf \"%.6f\", 10^($BAL_L_DB/20)}")
+BAL_R_MULT=$(LC_ALL=C awk "BEGIN{printf \"%.6f\", 10^($BAL_R_DB/20)}")
 
-# ---- 4. 重启前清掉残留 DSP(占住共享槽位会让新实例起不来) ----
+# ---- 2. 部署 DSP 二进制与 wrapper（wrapper 路径必须纯 ASCII） ----
+install -m 755 "$ROOT/target/release/collaplex-realtime" "$BIN"
+cat > "$WRAPPER" <<EOF
+#!/bin/sh
+export CX_RATE=96000
+export CX_SHELF_DB=$SHELF_DB
+export CX_SHELF_FREQ=$SHELF_FREQ
+export CX_SHELF_S=$SHELF_S
+export CX_AGC_INIT_DB=$AGC_INIT_DB
+export CX_AGC=$AGC
+export CX_AGC_CEIL=$AGC_CEIL
+export CX_AGC_DZ=$AGC_DZ
+export CX_AGC_TAU_DOWN=$AGC_TAU_DOWN
+export CX_AGC_TAU_UP=$AGC_TAU_UP
+export CX_AGC_DET_TAU=$AGC_DET_TAU
+export CX_AGC_BOOST=$AGC_BOOST
+export CX_AGC_CUT=$AGC_CUT
+export CX_AGC_UP_RATE=$AGC_UP_RATE
+export CX_AGC_DOWN_S=$AGC_DOWN_S
+export CX_AGC_SILENCE_RELEASE=$AGC_SILENCE_RELEASE
+export CX_AGC_GATE=$AGC_GATE
+export CX_AGC_ACTIVATE=$AGC_ACTIVATE
+export CX_AGC_HYST=$AGC_HYST
+export CX_AGC_MODE=$AGC_MODE
+export CX_CLIP_MEASURE_S=$CLIP_MEASURE_S
+export CX_CLIP_BOUNDARY_MS=$CLIP_BOUNDARY_MS
+export CX_CLIP_BOUNDARY_LUFS=$CLIP_BOUNDARY_LUFS
+export CX_CLIP_RECHECK_S=$CLIP_RECHECK_S
+export CX_VERIFY_DELAY_S=$VERIFY_DELAY_S
+export CX_VERIFY_RAMP_S=$VERIFY_RAMP_S
+export CX_VERIFY_DZ=$VERIFY_DZ
+export CX_DRY_TRANSFER_INIT=$DRY_TRANSFER_INIT
+export CX_LIMIT_CEIL=$LIMIT_CEIL
+export CX_DEBUG=$CX_DEBUG
+exec "$BIN"
+EOF
+chmod 755 "$WRAPPER"
+cat > "$GAP" <<EOF
+#!/bin/sh
+export CX_RATE=96000
+export CX_DETECT=1
+export CX_GAP_SIDE=L
+export CX_GAP_DBFS=$GAP_DBFS
+export CX_GAP_MS=$GAP_MS
+exec "$BIN" "\$@"
+EOF
+chmod 755 "$GAP"
+cat > "$GAP_R" <<EOF
+#!/bin/sh
+export CX_RATE=96000
+export CX_DETECT=1
+export CX_GAP_SIDE=R
+export CX_GAP_DBFS=$GAP_DBFS
+export CX_GAP_MS=$GAP_MS
+exec "$BIN" "\$@"
+EOF
+chmod 755 "$GAP_R"
+echo "已装 DSP: $WRAPPER / $GAP / $GAP_R"
+
+# ---- 3. 渲染配置 ----
+# 清掉旧版 collaplex 链的配置，避免两套链打架（保留 99-clock-96k.conf）
+rm -f "$CONF_DIR/10-collaplex-vsink.conf" "$CONF_DIR/20-collaplex-hrtf.conf" \
+      "$CONF_DIR/30-collaplex-eq.conf" "$CONF_DIR/40-collaplex-mono.conf" "$CONF_DIR/30-rt-mono.conf" \
+      "$CONF_DIR/91-clock.conf"
+sed -e "s|__HRIR__|$ASSETS/hrir|g" -e "s|__REVERB__|$ASSETS/reverb/cinema-ir-96k.wav|g" \
+    -e "s|__DSP_IN__|collaplex_dsp_in|g" -e "s|__GAP_L__|$GAP|g" -e "s|__GAP_R__|$GAP_R|g" \
+    "$ROOT/pipewire/10-rt-hrtf.conf" > "$CONF_DIR/10-rt-hrtf.conf"
+sed -e "s|__DSP__|$WRAPPER|g" -e "s|__TARGET__|$EQ_TARGET|g" \
+    -e "s|__BAL_L_MULT__|$BAL_L_MULT|g" -e "s|__BAL_R_MULT__|$BAL_R_MULT|g" \
+    "$ROOT/pipewire/20-rt-dsp.conf" > "$CONF_DIR/20-rt-dsp.conf"
+if [ "$MODE" = "mono" ]; then
+    sed -e "s|__TARGET__|$TARGET_NAME|g" \
+        "$ROOT/pipewire/30-rt-mono.conf" > "$CONF_DIR/30-rt-mono.conf"
+else
+    rm -f "$CONF_DIR/30-rt-mono.conf"
+fi
+cp "$ROOT/pipewire/91-rt-clock.conf" "$CONF_DIR/91-rt-clock.conf"
+echo "已装配置: 10-rt-hrtf.conf / 20-rt-dsp.conf / 91-rt-clock.conf"
+
+# ---- 4. 清残留 DSP（占住 shm 槽位会让新实例退出） ----
 for p in /proc/[0-9]*; do
     [ -r "$p/cmdline" ] || continue
     c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null) || continue
     case "$c" in
-        *python*dsp/loudness_norm.py*) kill -9 "${p#/proc/}" 2>/dev/null || true;;
-        *python*dsp/eq.py*) kill -9 "${p#/proc/}" 2>/dev/null || true;;
-        *python*dsp/wet_gain.py*) kill -9 "${p#/proc/}" 2>/dev/null || true;;
+        *collaplex-realtime-bin*|*target/release/collaplex-realtime*) kill -9 "${p#/proc/}" 2>/dev/null || true;;
     esac
 done
-sleep 1
+rm -f /dev/shm/collaplex-rt-agc /dev/shm/collaplex-rt-agc.lock* /dev/shm/collaplex-rt-gap /dev/shm/collaplex-rt-ctl /dev/shm/collaplex-rt-scope
 
-# ---- 5. 重载 ----
+# ---- 5. 重载 PipeWire ----
 systemctl --user restart pipewire pipewire-pulse wireplumber
-sleep 8
+sleep 4
+# 重启后链路需要重新判定一次；否则“active”状态会让监视进程跳过切默认输出
+printf 'waiting\n' > "$STATE_DIR/chain-state"
 
-# ---- 5b. 蓝牙设备: 重启 PipeWire 会断 A2DP, 重连一次并切回 a2dp ----
-#     不重连节点不回来(面板会一直"等待设备"); 回来也可能停在 HFP(通话 8/16 kHz, 听着像电话)。
-case "$TARGET" in
-    bluez_output.*)
-        "$PY" - "$ROOT/web" "$TARGET" <<'PY' || true
-import subprocess
-import sys
-import time
+# ---- 6. 立即判定一次链路状态，再启动设备监视 ----
+# 目标设备不在位时链路只是“待命”：配置和 DSP 都保留，默认输出不切到虚拟声卡；
+# 设备接上后由 target-watch 按 模拟 → 数字 → 虚拟声卡 激活。
+bash "$ROOT/scripts/target-watch.sh" --once || true
 
-sys.path.insert(0, sys.argv[1])
+PIDFILE="$STATE_DIR/watch.pid"
+OLD_PID=""
+[ -f "$PIDFILE" ] && OLD_PID=$(cat "$PIDFILE" 2>/dev/null || true)
+case "$OLD_PID" in ''|*[!0-9]*) OLD_PID=0;; esac
+if [ "$OLD_PID" -gt 0 ] && kill -0 "$OLD_PID" 2>/dev/null; then
+    echo "设备监视: 已在运行 (pid $OLD_PID)"
+else
+    setsid nohup bash "$ROOT/scripts/target-watch.sh" >/dev/null 2>&1 < /dev/null &
+    echo "设备监视: 已启动"
+fi
 
-import output_route  # noqa: E402
-
-target = sys.argv[2]
-mac = output_route.bt_mac(target)
-
-
-def reconnect() -> None:
-    """断开再连: 重启 PipeWire 后直接 connect 常常只拿回 HFP, 断一次才会把 a2dp 端点挂上。"""
-    print("  蓝牙重连 " + mac + " ...", file=sys.stderr)
-    subprocess.run(["timeout", "20", "bluetoothctl", "disconnect", mac], capture_output=True)
-    time.sleep(2)
-    subprocess.run(["timeout", "25", "bluetoothctl", "connect", mac], capture_output=True)
-    for _ in range(15):
-        if output_route.resolve_device(target):
-            break
-        time.sleep(1)
-
-
-def wait_a2dp(secs: int) -> bool:
-    """等 A2DP profile 出现(刚连上时先只列 HFP)。"""
-    for _ in range(secs):
-        if output_route.a2dp_index(target):
-            return True
-        time.sleep(1)
-    return False
-
-
-if not output_route.resolve_device(target):
-    reconnect()
-if not wait_a2dp(12):
-    reconnect()
-    wait_a2dp(12)
-switched, info = output_route.prefer_a2dp(target)
-if info:
-    print("  " + info, file=sys.stderr)
-for _ in range(10):
-    if output_route.resolve_device(target):
-        break
-    time.sleep(1)
-PY
-        ;;
-esac
-
-# ---- 6. 自检 ----
+# ---- 7. 自检 ----
 echo "=== 自检 ==="
-echo -n "节点: "; pw-dump | grep -o '"node.name": "collaplex[^"]*"' | sort -u | tr '\n' ' '; echo
+echo -n "节点: "; pw-dump 2>/dev/null | grep -o '"node.name": "collaplex[^"]*"' | sort -u | tr '\n' ' '; echo
 n=0
 for p in /proc/[0-9]*; do
     [ -r "$p/cmdline" ] || continue
     c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null) || continue
-    case "$c" in "/usr/bin/python3 "*dsp/loudness_norm.py*) n=$((n+1));; esac
+    case "$c" in *collaplex-realtime-bin*) n=$((n+1));; esac
 done
-echo "DSP 进程数: $n (归一化, 应为 2)"
-m=0
-for p in /proc/[0-9]*; do
-    [ -r "$p/cmdline" ] || continue
-    c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null) || continue
-    case "$c" in *python*dsp/eq.py*) m=$((m+1));; esac
-done
-echo "EQ 进程数: $m (应为 2)"
-w=0
-for p in /proc/[0-9]*; do
-    [ -r "$p/cmdline" ] || continue
-    c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null) || continue
-    case "$c" in *python*dsp/wet_gain.py*) w=$((w+1));; esac
-done
-echo "湿量进程数: $w (应为 2)"
-echo -n "默认输出: "; wpctl inspect @DEFAULT_SINK@ 2>/dev/null | grep -m1 "node.name" | sed 's/.*= //'
-# 末段挂载: 单声道设备挂 mono_out, 立体声设备挂 eq_out —— 由 output_route 判定并补线
-"$PY" - "$ROOT/web" "$TARGET" "$TARGET_DESC" <<'PY'
-import sys
-
-sys.path.insert(0, sys.argv[1])
-
-import output_route
-
-ok, msg = output_route.select(sys.argv[2], sys.argv[3])
-print("末段挂载: " + ("成功 - " if ok else "失败 - ") + msg)
-if output_route.mono_active() != output_route.saved()["mono"]:
-    print("★ 模式与部署不一致, 请重跑 collaplex-audio start")
-PY
-
-# ---- 5. 面板自启(systemd --user, 登录即起) ----
-# 链路本身不需要服务: conf 在 ~/.config/pipewire/pipewire.conf.d/, PipeWire 起来就自动加载。
-UNIT_DIR="$HOME/.config/systemd/user"
-mkdir -p "$UNIT_DIR"
-sed -e "s|__ROOT__|$ROOT|g" -e "s|__PY__|$PY|g" -e "s|__PORT__|8789|g" \
-    "$ROOT/systemd/collaplex-audio-panel.service" > "$UNIT_DIR/collaplex-audio-panel.service"
-if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user daemon-reload 2>/dev/null || true
-    if systemctl --user enable --now collaplex-audio-panel.service 2>/dev/null; then
-        echo "面板服务: 已启用(登录自启) http://127.0.0.1:8789"
-    else
-        echo "面板服务: 未能启用(可手动 collaplex-audio web)"
-    fi
-fi
+echo "DSP/间隙进程数: $n (应为 4：2 DSP + 2 干声响度锚点)"
+echo -n "链路状态: "; cat "$STATE_DIR/chain-state" 2>/dev/null || echo "(未知)"
+echo -n "默认输出: "; wpctl inspect @DEFAULT_SINK@ 2>/dev/null | sed -n 's/.*node.name = "\(.*\)"/\1/p' | head -1
+[ "$TARGET_PRESENT" = 1 ] || echo "提示: 目标设备未接，链路处于待命；接上后自动激活"

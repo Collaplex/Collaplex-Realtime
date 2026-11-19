@@ -1,22 +1,2 @@
-# 虚拟环境
-.venv/
-venv/
-
-# Python
-__pycache__/
-*.pyc
-
-# 构建与发布产物
-build/
-dist/
-*.deb
-
-# 本地状态与日志
-*.log
-
-# 测试截图
-tests/*.png
-
-# 测试素材(音频 / 测量结果)
-测试/**/*.wav
-测试/**/*.json
+/target
+/dist/

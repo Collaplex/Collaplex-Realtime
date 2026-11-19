@@ -1,0 +1,22 @@
+[package]
+name = "collaplex-realtime"
+version = "0.1.4"
+edition = "2024"
+description = "Collaplex 实时 DSP：PipeWire pipe 插件（搁架/平衡/AGC/限幅）"
+license = "Apache-2.0"
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time", "process"] }
+fs2 = "0.4"
+rustfft = "6"
+libc = "0.2"
+memmap2 = "0.9"
+
+[profile.release]
+opt-level = 3
+lto = "thin"

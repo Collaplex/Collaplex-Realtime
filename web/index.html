@@ -1,532 +1,718 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Collaplex 音效</title>
+<title>Collaplex RT · 实时控制台</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
-:root{
-  --bg:#0f0f0f; --card:#161616; --card-hi:#1c1c1c; --bd:#262626; --bd-hi:#343434;
-  --fg:#e8e8e8; --mut:#8a8a8a; --dim:#666; --ok:#4ade80; --warn:#fbbf24; --hot:#f87171;
-}
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--fg);font-family:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
-     font-size:13px;padding:18px 20px 26px}
-h1{font-size:16px;font-weight:600;letter-spacing:.5px}
-h1 small{color:var(--mut);font-size:11px;font-weight:400;margin-left:10px}
-.head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px;gap:12px}
-.status{color:var(--mut);font-size:11px}
-.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px 16px;margin-bottom:14px}
-.card h2{font-size:11px;font-weight:500;color:var(--mut);letter-spacing:1px;margin-bottom:12px;text-transform:uppercase}
+  :root {
+    --paper: #f4f2ec; --paper-2: #fffdf8; --ink: #111110; --muted: #6d6b64;
+    --line: #dcd8ce; --strong: #111110; --accent: #e4472b;
+    --s1: #2a78d6; --s2: #d95926;
+    --font: "Helvetica Neue", "Inter", "Arial", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--font); font-size: 13px; line-height: 1.45; -webkit-font-smoothing: antialiased; }
+  button, input, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .wrap { width: min(1800px, 100%); margin: 0 auto; padding: 0 clamp(16px, 3vw, 44px); }
 
-/* ---- 电平表 ---- */
-.meters{display:grid;grid-template-columns:1fr 1fr;gap:10px 22px}
-.meter{display:flex;align-items:center;gap:9px}
-.meter .lbl{width:30px;color:var(--mut);font-size:11px;flex:none}
-.bar{position:relative;flex:1;height:12px;background:#111;border:1px solid var(--bd);border-radius:3px;overflow:hidden}
-.bar i{position:absolute;left:0;top:0;bottom:0;width:0%;
-       background:linear-gradient(90deg,#166534,#4ade80 72%,#fbbf24 90%,#f87171);transition:width .08s linear}
-.meter .val{width:56px;text-align:right;font-size:11px;color:var(--fg);flex:none;font-variant-numeric:tabular-nums}
-.meter .pk{font-size:10px;color:var(--dim);width:52px;text-align:right;flex:none}
+  .site-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 18px; padding: 18px 0 13px; border-bottom: 1px solid var(--strong); }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand-icon { width: 26px; height: 26px; display: block; border-radius: 6px; flex: none; }
+  .brand-mark { font-size: 19px; font-weight: 700; letter-spacing: -0.035em; }
+  .brand-sub { font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); }
+  .head-right { display: flex; align-items: center; gap: 16px; font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+  .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); display: inline-block; margin-right: 5px; vertical-align: middle; }
+  .live-dot.on { background: var(--accent); box-shadow: 0 0 0 3px rgba(228,71,43,.15); }
+  .head-status { color: var(--ink); border-bottom: 1px solid var(--ink); padding-bottom: 1px; }
+  .head-status[data-kind="error"] { color: var(--accent); border-color: var(--accent); }
 
-/* ---- 滑块 ---- */
-.row{display:flex;align-items:center;gap:14px;margin-bottom:12px}
-.row:last-child{margin-bottom:0}
-.row .name{width:96px;flex:none;color:var(--fg);font-size:12px}
-.row .num{width:84px;text-align:right;flex:none;color:var(--ok);font-variant-numeric:tabular-nums}
-input[type=range]{-webkit-appearance:none;appearance:none;flex:1;height:22px;background:transparent;cursor:ns-resize}
-input[type=range]::-webkit-slider-runnable-track{height:4px;background:var(--bd-hi);border-radius:2px}
-input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;margin-top:-5px;
-  border-radius:50%;background:var(--ok);border:none}
-input[type=range]:hover::-webkit-slider-thumb{background:#86efac}
-input[type=range]::-moz-range-track{height:4px;background:var(--bd-hi);border-radius:2px}
-input[type=range]::-moz-range-thumb{width:14px;height:14px;border:none;border-radius:50%;background:var(--ok)}
-.hint{color:var(--dim);font-size:10px;margin-top:8px}
-/* 单声道混合开关(输出设备卡片) */
-.chk{display:flex;align-items:center;gap:8px;flex:1;color:var(--fg);font-size:12px;cursor:pointer;user-select:none}
-.chk input{-webkit-appearance:none;appearance:none;width:14px;height:14px;flex:none;margin:0;
-  border:1px solid var(--bd-hi);border-radius:3px;background:transparent;cursor:pointer;position:relative}
-.chk input:checked{background:var(--ok);border-color:var(--ok)}
-.chk input:checked::after{content:"";position:absolute;left:4px;top:1px;width:4px;height:8px;
-  border:solid #08110d;border-width:0 2px 2px 0;transform:rotate(45deg)}
+  .console { display: grid; grid-template-columns: 0.8fr 1.55fr 1.05fr 0.7fr 0.9fr; border: 1px solid var(--strong); margin-top: 18px; }
+  .strip { border-right: 1px solid var(--strong); padding: 13px 13px 15px; min-width: 0; }
+  .strip:last-child { border-right: 0; }
+  .strip-head { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid var(--strong); padding-bottom: 7px; margin-bottom: 11px; }
+  .strip-title { font-size: 11px; font-weight: 700; letter-spacing: 0.16em; }
+  .strip-sub { font-size: 8.5px; letter-spacing: 0.13em; color: var(--muted); margin-top: 2px; }
+  .strip-index { font-size: 9px; letter-spacing: 0.12em; color: var(--muted); }
 
-/* ---- 归一化的电平与动态增益 ---- */
-.viz{display:flex;align-items:center;gap:9px;margin-top:9px;padding-left:110px}
-.viz .lbl{width:70px;flex:none;color:var(--mut);font-size:11px}
-.viz .bar{flex:1;height:10px;border-radius:3px}
-.viz .gauge{position:relative;flex:1;height:10px;background:#111;border:1px solid var(--bd);border-radius:3px}
-.viz .gauge::before{content:"";position:absolute;left:60%;top:-2px;width:1px;height:12px;background:var(--dim)}
-.viz .gauge i{position:absolute;top:-3px;width:6px;height:14px;border-radius:2px;background:var(--ok);
-              transform:translateX(-50%);transition:left .12s linear}
-.viz .num{width:84px;flex:none;text-align:right;color:var(--fg);font-variant-numeric:tabular-nums}
+  .fader-bank { display: grid; grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr)); gap: 10px 4px; }
+  .chan { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
+  .chan-label { font-size: 9px; line-height: 1.2; letter-spacing: 0.04em; color: var(--muted); text-align: center; min-height: 23px; }
+  .chan-unit { display: block; font-size: 8px; color: var(--muted); opacity: .8; }
+  .readout { width: 100%; max-width: 56px; border: 1px solid var(--strong); background: var(--paper-2); padding: 1px 0; }
+  .readout input { width: 100%; border: 0; background: transparent; text-align: center; padding: 1px 0; font-size: 11px; font-variant-numeric: tabular-nums; -moz-appearance: textfield; }
+  .readout input::-webkit-outer-spin-button, .readout input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .fader { position: relative; width: 38px; height: 84px; }
+  .fader .scale { position: absolute; left: 2px; top: 5px; bottom: 5px; width: 3px; opacity: .28; background: repeating-linear-gradient(to bottom, var(--ink) 0 1px, transparent 1px 11px); }
+  .fader input[type="range"] { position: absolute; left: 50%; top: 50%; width: 84px; height: 26px; transform: translate(-50%, -50%) rotate(-90deg); -webkit-appearance: none; appearance: none; background: transparent; cursor: ns-resize; }
+  .fader input[type="range"]::-webkit-slider-runnable-track { height: 2px; background: var(--ink); }
+  .fader input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 26px; height: 12px; margin-top: -5px; background: var(--paper); border: 1px solid var(--ink); border-radius: 1px; }
+  .fader input[type="range"]::-moz-range-track { height: 2px; background: var(--ink); }
+  .fader input[type="range"]::-moz-range-thumb { width: 24px; height: 10px; background: var(--paper); border: 1px solid var(--ink); border-radius: 1px; }
 
-/* ---- EQ 预设 ---- */
-.presets{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
-.presets button{padding:4px 11px;font-size:11px}
-.presets button.on{border-color:var(--ok);color:var(--ok);background:#12211a}
-.presets-title{font-size:10px;color:var(--dim);margin:10px 0 6px;letter-spacing:.5px}
-/* 场所预设 = EQ + 混响一起切, 用偏绿的边框跟普通 EQ 预设区分 */
-.presets.venues button{border-color:#2f4a38}
-.presets.venues button.on{border-color:var(--ok);color:var(--ok);background:#12211a}
+  .strip-controls { display: flex; flex-direction: column; gap: 6px; margin-top: 11px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .row label { font-size: 9.5px; letter-spacing: 0.04em; color: var(--muted); }
+  .row input[type="number"] { width: 66px; border: 1px solid var(--strong); background: var(--paper-2); padding: 2px 4px; text-align: right; font-size: 11px; font-variant-numeric: tabular-nums; }
+  .row select { border: 1px solid var(--strong); background: var(--paper-2); padding: 3px 4px; font-size: 10.5px; }
+  .sw { width: 100%; display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--strong); background: transparent; padding: 5px 7px; font-size: 9.5px; letter-spacing: 0.06em; text-transform: uppercase; text-align: left; }
+  .sw .sw-state { font-size: 8.5px; color: var(--muted); letter-spacing: 0.08em; }
+  .sw[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+  .sw[aria-pressed="true"] .sw-state { color: var(--paper); opacity: .75; }
+  .sw.accent[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); }
 
-/* ---- EQ ---- */
-.eq{display:flex;align-items:flex-end;gap:3px;height:190px;padding-top:6px}
-.band{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;height:100%}
-.band .v{font-size:9px;color:var(--dim);height:11px;font-variant-numeric:tabular-nums}
-.band input{writing-mode:vertical-lr;direction:rtl;width:100%;height:100%;
-            -webkit-appearance:none;appearance:none;background:transparent;cursor:ns-resize}
-.band input::-webkit-slider-runnable-track{width:4px;height:100%;background:var(--bd-hi);border-radius:2px}
-.band input::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:9px;margin-left:-5px;
-  border-radius:2px;background:var(--ok)}
-.band:hover input::-webkit-slider-thumb{background:#86efac}
-.band input::-moz-range-track{width:4px;background:var(--bd-hi);border-radius:2px}
-.band input::-moz-range-thumb{width:14px;height:9px;border:none;border-radius:2px;background:var(--ok)}
-.band .f{font-size:9px;color:var(--mut);transform:rotate(-60deg);transform-origin:center;height:20px;
-         white-space:nowrap;margin-top:2px}
-.btns{display:flex;gap:8px;margin-top:12px}
-button{background:var(--card-hi);color:var(--fg);border:1px solid var(--bd-hi);border-radius:6px;
-       padding:5px 12px;font:inherit;font-size:11px;cursor:pointer}
-button:hover{border-color:var(--ok);color:var(--ok)}
-select{background:var(--card-hi);color:var(--fg);border:1px solid var(--bd-hi);border-radius:6px;
-       padding:5px 8px;font:inherit;font-size:11px;flex:1;min-width:0;cursor:pointer}
-select:hover{border-color:var(--ok)}
+  .transport { margin-top: 10px; }
+  .meter-pair { display: flex; gap: 12px; justify-content: center; margin: 3px 0 12px; }
+  .meter-block { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .meter-block span { font-size: 8.5px; letter-spacing: .1em; color: var(--muted); }
+  .meter { position: relative; width: 18px; height: 116px; border: 1px solid var(--strong); background: var(--paper-2); }
+  .meter .fill { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: var(--ink); transition: height .18s var(--ease); }
+  .transport-btn { width: 100%; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); padding: 9px 8px; font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; }
+  .transport-btn:hover { background: var(--accent); border-color: var(--accent); }
+  .transport-btn:disabled { opacity: .45; }
+  .status-line { display: flex; justify-content: space-between; gap: 6px; margin-top: 8px; font-size: 8.5px; color: var(--muted); }
+  .pill { text-transform: uppercase; letter-spacing: .08em; border-bottom: 1px solid var(--line); }
+  .pill.on { color: var(--accent); border-color: var(--accent); }
+
+  .monitor { margin-top: 28px; }
+  .section-head { display: flex; align-items: baseline; gap: 14px; border-bottom: 1px solid var(--strong); padding-bottom: 7px; }
+  .section-kicker { font-size: 9px; letter-spacing: .2em; color: var(--muted); text-transform: uppercase; }
+  .section-head h2 { font-size: 17px; margin: 0; letter-spacing: -.02em; font-weight: 650; }
+  .section-meta { margin-left: auto; font-size: 9px; color: var(--muted); text-align: right; overflow-wrap: anywhere; }
+  .kpis { display: grid; grid-template-columns: repeat(6, 1fr); border-bottom: 1px solid var(--strong); }
+  .kpi { border-right: 1px solid var(--line); padding: 10px 12px 11px; }
+  .kpi:last-child { border-right: 0; }
+  .kpi .label { font-size: 8.5px; letter-spacing: .13em; text-transform: uppercase; color: var(--muted); }
+  .kpi .value { font-size: 22px; font-weight: 650; letter-spacing: -.02em; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .kpi .value small { font-size: 9.5px; color: var(--muted); font-weight: 500; margin-left: 3px; }
+
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-top: 16px; }
+  .panel { border: 1px solid var(--strong); background: var(--paper); padding: 11px 13px 12px; position: relative; min-width: 0; }
+  .panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 6px; }
+  .panel-head h3 { margin: 0; font-size: 10px; letter-spacing: .14em; text-transform: uppercase; font-weight: 700; }
+  .panel-head .sub { font-size: 8.5px; color: var(--muted); letter-spacing: .05em; }
+  .chart-wrap { position: relative; }
+  canvas { width: 100%; display: block; }
+  #gainChart, #loudChart { height: 180px; }
+  .tip { position: absolute; pointer-events: none; z-index: 5; display: none; background: var(--paper-2); border: 1px solid var(--ink); padding: 5px 8px; font-size: 10px; white-space: nowrap; box-shadow: 3px 3px 0 rgba(17,17,16,.12); }
+  .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
+
+  .status-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0; border-top: 1px solid var(--line); }
+  .status-grid div { padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 10px; }
+  .status-grid .k { color: var(--muted); }
+  .status-grid .v { text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .big-state { font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
+  .big-state small { display: block; font-size: 8.5px; color: var(--muted); letter-spacing: .1em; text-transform: uppercase; font-weight: 500; margin-top: 2px; }
+
+  .footnote { margin-top: 16px; font-size: 9px; color: var(--muted); letter-spacing: .03em; }
+
+
+  /* ---------- visualizer deck ---------- */
+  .deck { display: grid; grid-template-columns: 250px minmax(0, 1fr) 240px minmax(0, 1fr); gap: 18px; margin-top: 18px; }
+  .deck .panel { padding: 10px 12px 12px; }
+  .disc-wrap { position: relative; width: 100%; aspect-ratio: 1 / 1; max-height: 190px; margin: 0 auto; }
+  .dial { width: 100%; height: 100%; display: block; }
+  .needle-g { transform-origin: 100px 100px; transform-box: view-box; will-change: transform; animation: spin 2.4s linear infinite; animation-play-state: paused; }
+  .needle-g.spinning { animation-play-state: running; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .lamp { position: absolute; top: 10px; right: 12px; width: 10px; height: 10px; border-radius: 50%; border: 1px solid var(--ink); background: var(--muted); z-index: 3; }
+  .lamp.green { background: #0ca30c; }
+  .lamp.yellow { background: #fab219; }
+  .lamp.red { background: #d03b3b; }
+  .lamp-label { position: absolute; top: 8px; right: 26px; font-size: 8px; letter-spacing: .12em; color: var(--muted); text-transform: uppercase; z-index: 3; }
+  .disc-meta { display: flex; justify-content: space-between; margin-top: 8px; font-size: 9px; letter-spacing: .1em; color: var(--muted); text-transform: uppercase; }
+  .disc-meta b { color: var(--accent); font-weight: 600; }
+  #specCanvas, #scopeCanvas { width: 100%; height: 180px; display: block; }
+  .vu-pair { display: flex; gap: 8px; justify-content: center; padding-top: 8px; }
+  .vu { width: 108px; height: 84px; }
+  .vu .scale { fill: none; stroke: var(--ink); stroke-width: .8; }
+  .vu .tick { stroke: var(--ink); stroke-width: .5; }
+  .vu .label { font-size: 6px; fill: var(--muted); }
+  .vu .needle { stroke: var(--accent); stroke-width: 1.4; stroke-linecap: round; }
+  .vu .cap { fill: var(--ink); }
+  @media (max-width: 1280px) {
+    .console { grid-template-columns: 1fr 1fr; }
+    .deck { grid-template-columns: 1fr 1fr; }
+    .strip { border-bottom: 1px solid var(--strong); }
+    .strip:nth-child(2n) { border-right: 0; }
+    .kpis { grid-template-columns: repeat(3, 1fr); }
+  }
+  @media (max-width: 820px) {
+    .console { grid-template-columns: 1fr; }
+    .strip { border-right: 0; }
+    .grid { grid-template-columns: 1fr; }
+    .kpis { grid-template-columns: repeat(2, 1fr); }
+    .site-header { flex-direction: column; align-items: flex-start; }
+  }
 </style>
 </head>
 <body>
-<div class="head">
-  <h1>Collaplex 音效<small>滚轮调节 · Shift+滚轮微调 · 双击归零</small></h1>
-  <div class="status" id="status">就绪</div>
-</div>
+<header class="site-header wrap">
+  <div class="brand">
+    <img class="brand-icon" src="/favicon.svg" alt="Collaplex">
+    <span class="brand-mark">COLLAPLEX</span>
+    <span class="brand-sub">RT · 实时控制台 / LIVE CONSOLE</span>
+  </div>
+  <div class="head-right">
+    <span><span class="live-dot" id="liveDot"></span><span id="liveLabel">未连接</span></span>
+    <span>127.0.0.1:8791</span>
+    <span class="head-status" id="headStatus" data-kind="idle">待机</span>
+  </div>
+</header>
 
-<div class="card">
-  <h2>电平</h2>
-  <div class="meters">
-    <div class="meter"><span class="lbl">入 L</span><div class="bar"><i id="bar-inL"></i></div><span class="val" id="val-inL">-∞</span><span class="pk" id="pk-inL"></span></div>
-    <div class="meter"><span class="lbl">出 L</span><div class="bar"><i id="bar-outL"></i></div><span class="val" id="val-outL">-∞</span><span class="pk" id="pk-outL"></span></div>
-    <div class="meter"><span class="lbl">入 R</span><div class="bar"><i id="bar-inR"></i></div><span class="val" id="val-inR">-∞</span><span class="pk" id="pk-inR"></span></div>
-    <div class="meter"><span class="lbl">出 R</span><div class="bar"><i id="bar-outR"></i></div><span class="val" id="val-outR">-∞</span><span class="pk" id="pk-outR"></span></div>
-  </div>
-  <div class="hint">条长 = 实时 RMS(-60 ~ 0 dBFS),右侧小字 = 本块峰值</div>
-</div>
+<main class="wrap">
+  <section class="deck">
+    <article class="panel">
+      <span class="lamp red" id="lamp"></span>
+      <span class="lamp-label" id="lampLabel">OFF</span>
+      <div class="disc-wrap">
+        <svg viewBox="0 0 200 200" class="dial" aria-label="转盘">
+          <circle cx="100" cy="100" r="92" fill="none" stroke="#111110" stroke-width="2"/>
+          <g class="needle-g" id="needleG">
+            <line x1="100" y1="111" x2="100" y2="16" stroke="#e4472b" stroke-width="3" stroke-linecap="round"/>
+          </g>
+          <circle cx="100" cy="100" r="5.5" fill="#111110"/>
+        </svg>
+      </div>
+      <div class="disc-meta"><span>LIVE DECK</span><b id="discState">IDLE</b></div>
+    </article>
+    <article class="panel">
+      <div class="panel-head"><h3>Spectrum</h3><span class="sub">20 Hz – 20 kHz · dBFS</span></div>
+      <canvas id="specCanvas" aria-label="实时频谱"></canvas>
+    </article>
+    <article class="panel">
+      <div class="panel-head"><h3>VU</h3><span class="sub">L / R · RMS</span></div>
+      <div class="vu-pair">
+        <svg viewBox="0 0 100 72" class="vu" id="vuL" aria-label="左声道 VU">
+          <path class="scale" d="M12 62 A44 44 0 0 1 88 62"/>
+          <g class="ticks" stroke="#111110" stroke-width="0.6">
+            <line x1="14" y1="52" x2="18" y2="54"/><line x1="24" y1="36" x2="28" y2="40"/>
+            <line x1="40" y1="24" x2="42" y2="29"/><line x1="60" y1="24" x2="58" y2="29"/>
+            <line x1="76" y1="36" x2="72" y2="40"/><line x1="86" y1="52" x2="82" y2="54"/>
+          </g>
+          <text class="label" x="10" y="66">−40</text><text class="label" x="26" y="32">−20</text>
+          <text class="label" x="44" y="21">−10</text><text class="label" x="64" y="25">−3</text>
+          <text class="label" x="84" y="66">0</text>
+          <line class="needle" id="needleL" x1="50" y1="62" x2="50" y2="22"/>
+          <circle class="cap" cx="50" cy="62" r="3"/>
+        </svg>
+        <svg viewBox="0 0 100 72" class="vu" id="vuR" aria-label="右声道 VU">
+          <path class="scale" d="M12 62 A44 44 0 0 1 88 62"/>
+          <g class="ticks" stroke="#111110" stroke-width="0.6">
+            <line x1="14" y1="52" x2="18" y2="54"/><line x1="24" y1="36" x2="28" y2="40"/>
+            <line x1="40" y1="24" x2="42" y2="29"/><line x1="60" y1="24" x2="58" y2="29"/>
+            <line x1="76" y1="36" x2="72" y2="40"/><line x1="86" y1="52" x2="82" y2="54"/>
+          </g>
+          <text class="label" x="10" y="66">−40</text><text class="label" x="26" y="32">−20</text>
+          <text class="label" x="44" y="21">−10</text><text class="label" x="64" y="25">−3</text>
+          <text class="label" x="84" y="66">0</text>
+          <line class="needle" id="needleR" x1="50" y1="62" x2="50" y2="22"/>
+          <circle class="cap" cx="50" cy="62" r="3"/>
+        </svg>
+      </div>
+    </article>
+    <article class="panel">
+      <div class="panel-head"><h3>Scope</h3><span class="sub">触发 · mid</span></div>
+      <canvas id="scopeCanvas" aria-label="实时示波器"></canvas>
+    </article>
+  </section>
 
-<div class="card">
-  <h2>控制</h2>
-  <div class="row">
-    <span class="name">电平归一化</span>
-    <input type="range" id="loud" min="-30" max="-6" step="0.5">
-    <span class="num" id="loud-num">—</span>
-  </div>
-  <div class="viz">
-    <span class="lbl">输入电平</span>
-    <div class="bar"><i id="bar-loud"></i></div>
-    <span class="num" id="loud-in">-∞</span>
-  </div>
-  <div class="viz">
-    <span class="lbl">动态增益</span>
-    <div class="gauge"><i id="loud-gain" style="left:60%"></i></div>
-    <span class="num" id="loud-gain-num">—</span>
-  </div>
-  <div class="row">
-    <span class="name">混响湿度</span>
-    <input type="range" id="wet" min="0" max="1" step="0.01">
-    <span class="num" id="wet-num">—</span>
-  </div>
-  <div class="row">
-    <span class="name">总音量</span>
-    <input type="range" id="vol" min="-12" max="12" step="0.5">
-    <span class="num" id="vol-num">—</span>
-  </div>
-</div>
+  <section class="console" id="console"></section>
 
-<div class="card">
-  <h2>输出设备</h2>
-  <div class="row">
-    <span class="name">输出到</span>
-    <select id="outdev"></select>
-    <button id="outapply">应用</button>
-    <span class="num" id="outstate">—</span>
-  </div>
-  <div class="row">
-    <span class="name">输出模式</span>
-    <label class="chk"><input type="checkbox" id="outmono">单声道混合（双声道混成一路，给模拟/单声道设备）</label>
-    <span class="num" id="outmonostate">—</span>
-  </div>
-  <div class="hint" id="outhint">换设备: 选一下再点「应用」。勾「单声道混合」是给只有一路的设备(3.5 口接单声道音箱 / 老功放): 双声道先按 0.5+0.5 混成一路再送出去, 切换会重建链路(约 10 秒; 蓝牙要断开重连一次, 可能 20 秒)。蓝牙直连的音响也在列表里, 会自动切回 A2DP(不用通话那套 8 kHz); 设备晚到(USB 耳机 / 蓝牙)由守护自动挂上。</div>
-</div>
+  <section class="monitor">
+    <div class="section-head">
+      <span class="section-kicker">MONITOR</span>
+      <h2>实时监测</h2>
+      <span class="section-meta" id="monMeta">等待链路数据</span>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><div class="label">Joint LUFS</div><div class="value" id="kJoint">—</div></div>
+      <div class="kpi"><div class="label">Source</div><div class="value" id="kSource">—</div></div>
+      <div class="kpi"><div class="label">AGC Gain</div><div class="value" id="kGain">—</div></div>
+      <div class="kpi"><div class="label">Clip State</div><div class="value" id="kClip">—</div></div>
+      <div class="kpi"><div class="label">Gap</div><div class="value" id="kGap">—</div></div>
+      <div class="kpi"><div class="label">L / R</div><div class="value" id="kLR">—</div></div>
+      <div class="kpi"><div class="label">Block</div><div class="value" id="kSeq">—</div></div>
+    </div>
 
-<div class="card">
-  <h2>32 段 EQ（1/3 倍频程 · ±15 dB）</h2>
-  <div class="presets" id="presets"></div>
-  <div class="presets-title">场所 · 一键切 EQ + 混响</div>
-  <div class="presets venues" id="venues"></div>
-  <div class="eq" id="eq"></div>
-  <div class="btns">
-    <button id="flat">全部归零</button>
-    <button id="reset">重新读取</button>
-  </div>
-</div>
+    <div class="grid">
+      <article class="panel">
+        <div class="panel-head"><h3>AGC Gain</h3><span class="sub">近 30 s · dB</span></div>
+        <div class="chart-wrap"><canvas id="gainChart" aria-label="AGC 增益历史"></canvas><div class="tip" id="tip-gain"></div><div class="empty" id="emptyGain">等待数据</div></div>
+      </article>
+      <article class="panel">
+        <div class="panel-head"><h3>Joint Loudness</h3><span class="sub">近 30 s · LUFS</span></div>
+        <div class="chart-wrap"><canvas id="loudChart" aria-label="联合响度历史"></canvas><div class="tip" id="tip-loud"></div><div class="empty" id="emptyLoud">等待数据</div></div>
+      </article>
+      <article class="panel">
+        <div class="panel-head"><h3>Chain</h3><span class="sub">节点 / 进程</span></div>
+        <div class="status-grid" id="chainStatus"></div>
+      </article>
+      <article class="panel">
+        <div class="panel-head"><h3>State</h3><span class="sub">片段 / 间隙</span></div>
+        <div class="big-state" id="bigState">—<small>等待链路</small></div>
+        <div class="status-grid" id="stateDetail"></div>
+      </article>
+    </div>
+    <p class="footnote">参数写入共享内存，DSP 每块读取并实时生效；IR / 湿量 / 左右平衡仍在 PipeWire 图里，改动需重载链路。起停按钮会重启 PipeWire，音频会中断数秒。</p>
+  </section>
+</main>
 
 <script>
-const el = (id) => document.getElementById(id);
-let gains = new Array(32).fill(0);
-let state = null;
-const post = async (path, body) => {
-  const r = await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
-  return r.ok;
-};
-const say = (t) => { el("status").textContent = t; };
-/* applyVenue 提交湿量时会走 wet 的 change handler; 那个 handler 是 async 的,
-   它里面的 markVenue(null) 会在 applyVenue 点亮之后才跑, 把高亮又清掉。
-   所以在 dispatch 那一刻把意图记下来, handler 据此决定要不要清。 */
-let venueApplying = false;
+"use strict";
+const C = { paper:'#f4f2ec', ink:'#111110', muted:'#6d6b64', grid:'#dcd8ce', axis:'#111110', s1:'#2a78d6', s2:'#d95926' };
 
-/* ---------- 滚轮捕获 ---------- */
-function bindWheel(input, onDelta, onDone) {
-  input.addEventListener("wheel", (e) => {
-    e.preventDefault();
-    const step = parseFloat(input.step) || 1;
-    const fine = e.shiftKey ? step / 5 : step;
-    const next = Math.min(parseFloat(input.max), Math.max(parseFloat(input.min),
-                  parseFloat(input.value) + (e.deltaY < 0 ? fine : -fine)));
-    input.value = next;
-    onDelta(next);
-    if (onDone) clearTimeout(input._t), input._t = setTimeout(onDone, 90);
-  }, {passive:false});
-}
-
-/* ---------- 三个控制滑块 ---------- */
-const loud = el("loud"), wet = el("wet"), vol = el("vol");
-
-/* 正在拖动/滚动的控件不能再用轮询结果覆盖 —— 否则每 250ms 弹回一次, 表现为
-   "推上去自己弹下来, 要试好几次才到位"。原先用 document.activeElement 判断,
-   但鼠标拖动时焦点常常不在滑块上, 所以改用显式标志 + 松手后的短暂静默期。 */
-const busy = {};
-const markBusy = (k, ms) => { busy[k] = Date.now() + ms; };
-const isBusy = (k) => (busy[k] || 0) > Date.now();
-[["loud", loud], ["wet", wet], ["vol", vol]].forEach(([k, s]) => {
-  s.addEventListener("pointerdown", () => markBusy(k, 1e7));   // 拖动期间一直忙
-  const release = () => markBusy(k, 600);                      // 松手后 0.6s 内别覆盖
-  s.addEventListener("pointerup", release);
-  s.addEventListener("pointercancel", release);
-  s.addEventListener("blur", release);
-  s.addEventListener("keydown", () => markBusy(k, 600));
-  s.addEventListener("wheel", () => markBusy(k, 700), {passive:true});
-});
-loud.addEventListener("input", () => el("loud-num").textContent = (+loud.value).toFixed(1) + " dB");
-wet.addEventListener("input", () => el("wet-num").textContent = (+wet.value).toFixed(2));
-vol.addEventListener("input", () => el("vol-num").textContent = (+vol.value >= 0 ? "+" : "") + (+vol.value).toFixed(1) + " dB");
-loud.addEventListener("change", async () => { await post("/api/loudness", {target_db:+loud.value}); say("归一化已生效"); });
-wet.addEventListener("change", async () => {
-  const fromVenue = venueApplying;          // dispatch 是同步的, 这里能读到 applyVenue 的意图
-  await post("/api/wet", {wet:+wet.value});
-  say("湿度已生效");
-  if (!fromVenue) markVenue(null);          // 只有手动改湿量才取消场所高亮
-});
-vol.addEventListener("change", async () => { await post("/api/volume", {db:+vol.value}); say("总音量已生效"); });
-bindWheel(loud, v => el("loud-num").textContent = v.toFixed(1) + " dB", () => loud.dispatchEvent(new Event("change")));
-bindWheel(wet, v => el("wet-num").textContent = v.toFixed(2), () => wet.dispatchEvent(new Event("change")));
-bindWheel(vol, v => el("vol-num").textContent = (v >= 0 ? "+" : "") + v.toFixed(1) + " dB", () => vol.dispatchEvent(new Event("change")));
-[loud, wet, vol].forEach(s => s.addEventListener("dblclick", () => {
-  s.value = s.dataset.def; s.dispatchEvent(new Event("input")); s.dispatchEvent(new Event("change"));
-}));
-loud.dataset.def = -16; wet.dataset.def = 0.3; vol.dataset.def = 0;
-
-/* ---------- 32 段 EQ ---------- */
-const eqBox = el("eq");
-let commitTimer = null;
-function commitEq() {
-  clearTimeout(commitTimer);
-  commitTimer = setTimeout(async () => {
-    const ok = await post("/api/eq", {gains});
-    say(ok ? "EQ 已生效" : "EQ 写入失败");
-  }, 90);
-}
-state = null;
-function buildEq(freqs) {
-  eqBox.innerHTML = "";
-  freqs.forEach((f, i) => {
-    const band = document.createElement("div");
-    band.className = "band";
-    const v = document.createElement("div"); v.className = "v"; v.textContent = "0";
-    const input = document.createElement("input");
-    input.type = "range"; input.min = -15; input.max = 15; input.step = 0.5; input.value = 0;
-    input.dataset.index = i;
-    const label = document.createElement("div"); label.className = "f";
-    label.textContent = f >= 1000 ? (f / 1000) + "k" : f;
-    input.addEventListener("input", () => {
-      const val = parseFloat(input.value);
-      v.textContent = val === 0 ? "" : (val > 0 ? "+" : "") + val.toFixed(1);
-      gains[i] = val;
-      commitEq();
-      markPreset(null);                       // 手动改过就不是任何预设了
-      markVenue(null);
-    });
-    bindWheel(input, (val) => { input.value = val; input.dispatchEvent(new Event("input")); });
-    input.addEventListener("dblclick", () => { input.value = 0; input.dispatchEvent(new Event("input")); });
-    band.append(v, input, label);
-    eqBox.appendChild(band);
-  });
-}
-
-/* ---------- EQ 预设 ---------- */
-/* 控制点 = [频率 Hz, 增益 dB], 在对数频率轴上插值成 32 段 —— 比写死 32 个数好维护。 */
-const PRESETS = {
-  "平直": [],
-  "流行": [[60, 2.5], [250, -1], [1000, 1], [4000, 2.5], [12000, 3]],
-  "摇滚": [[60, 5], [250, -2], [1000, -1], [3500, 3], [12000, 5]],
-  "爵士": [[60, 4], [200, 1.5], [800, -1], [3000, 1.5], [12000, 3]],
-  "古典": [[60, 3], [400, -1], [2000, 0.5], [8000, 2], [16000, 3]],
-  "人声": [[100, -3], [500, -1], [2000, 4], [6000, 2], [12000, 1]],
-  "低音": [[40, 7], [120, 5], [300, 2], [1000, 0], [4000, -1]],
-  "高音": [[200, -1], [2000, 1], [6000, 4], [14000, 6]],
-  "深夜": [[60, 4], [200, 3], [1000, 0], [4000, 1], [12000, 3]],   // 小音量等响度补偿
-  "柔化": [[3000, -2], [6000, -4], [12000, -5], [16000, -3]],      // 削刺耳高频
-};
-
-/* ---------- 场所预设: 一键同时切 EQ + 混响湿量 ---------- */
-/* 影院和歌剧院最本质的差别是**混响时间**(0.4~0.8 s vs 1.4~1.8 s), 光切 EQ 不够,
-   所以连湿量一起切。EQ 依据见 README「EQ 预设的设计依据」。
-   总音量不在这里动 —— 那是个人听音响度, 不该被场所覆盖。 */
-const VENUES = {
-  // 影院: 高频按 X-curve(ISO 2969 国际版, 2 kHz 以上约 -1.5 dB/oct; 北美 SMPTE 是 -3),
-  // 再叠银幕透声损失(4~10 kHz); 低频是影院 sub / LFE 通道的体感 -- 厚, 暗, 有力.
-  "电影院": {wet: 0.35, eq: [[25, 2.5], [60, 3], [150, 0.5], [400, -0.5], [1000, 0],
-                             [2000, -0.5], [4000, -2], [8000, -3.5], [16000, -5], [25000, -5.5]]},
-  // 歌剧院: 木质厅堂的温暖落在 150~400 Hz; 歌手不用麦, 全靠 2~5 kHz 的 presence 投射,
-  // 所以这里要抬不能削; 极高频只随空气吸收缓降 -- 暖, 亮, 有细节.
-  "歌剧院": {wet: 0.78, eq: [[30, -1], [80, 0.5], [160, 2], [300, 2], [700, 1], [1500, 0],
-                             [3000, 1], [5000, 1], [9000, 0], [16000, -1.5], [25000, -2]]},
-};
-function curveTo(pts, freqs) {
-  if (!pts.length) return freqs.map(() => 0);
-  const first = pts[0], last = pts[pts.length - 1];
-  return freqs.map((f) => {
-    if (f <= first[0]) return first[1];
-    if (f >= last[0]) return last[1];
-    for (let i = 0; i < pts.length - 1; i++) {
-      const a = pts[i], b = pts[i + 1];
-      if (f >= a[0] && f <= b[0]) {
-        const t = Math.log(f / a[0]) / Math.log(b[0] / a[0]);
-        return a[1] + (b[1] - a[1]) * t;
-      }
-    }
-    return 0;
-  });
-}
-/* 把一组控制点写进 32 段滑块并提交(EQ 预设与场所预设共用)。 */
-function applyEqPoints(pts) {
-  const freqs = state ? state.freqs : [];
-  if (!freqs.length) return;
-  const vals = curveTo(pts, freqs).map((g) => Math.round(g * 2) / 2);   // 对齐 0.5 步进
-  gains = vals.slice();
-  eqBox.querySelectorAll("input").forEach((inp, i) => {
-    inp.value = vals[i];
-    const v = inp.previousElementSibling;
-    v.textContent = vals[i] === 0 ? "" : (vals[i] > 0 ? "+" : "") + vals[i].toFixed(1);
-  });
-  commitEq();
-}
-/* 点了哪个按钮要看得见(不然选没选中没反馈); 手动改滑块即取消高亮。 */
-function markPreset(name) {
-  const box = el("presets");
-  if (!box) return;
-  box.querySelectorAll("button").forEach((b) => {
-    b.classList.toggle("on", name !== null && b.textContent === name);
-  });
-}
-function markVenue(name) {
-  const box = el("venues");
-  if (!box) return;
-  box.querySelectorAll("button").forEach((b) => {
-    b.classList.toggle("on", name !== null && b.textContent === name);
-  });
-}
-function applyPreset(name) {
-  applyEqPoints(PRESETS[name]);
-  markVenue(null);
-  markPreset(name);
-  say("EQ 预设: " + name);
-}
-/* 场所: EQ + 混响湿量一起切。湿量走 change 事件提交(和手动拖推子同一条路),
-   那个 handler 里会 markVenue(null), 所以要在它之后才点亮本按钮。 */
-function applyVenue(name) {
-  const spec = VENUES[name];
-  if (!spec) return;
-  applyEqPoints(spec.eq);
-  wet.value = spec.wet;
-  el("wet-num").textContent = spec.wet.toFixed(2);
-  markBusy("wet", 1500);                     // 别让 SSE 轮询把刚设的湿量弹回旧值
-  venueApplying = true;
-  wet.dispatchEvent(new Event("change"));    // handler 在同步阶段就把意图读走了
-  venueApplying = false;
-  markPreset(null);
-  markVenue(name);
-  say("场所: " + name + " · 混响 " + spec.wet.toFixed(2) + " · EQ 已切");
-}
-function buildPresets() {
-  const box = el("presets");
-  box.innerHTML = "";
-  Object.keys(PRESETS).forEach((name) => {
-    const b = document.createElement("button");
-    b.textContent = name;
-    b.addEventListener("click", () => applyPreset(name));
-    box.appendChild(b);
-  });
-}
-function buildVenues() {
-  const box = el("venues");
-  if (!box) return;
-  box.innerHTML = "";
-  Object.keys(VENUES).forEach((name) => {
-    const b = document.createElement("button");
-    b.textContent = name;
-    b.title = "同时切 EQ + 混响 " + VENUES[name].wet.toFixed(2);
-    b.addEventListener("click", () => applyVenue(name));
-    box.appendChild(b);
-  });
-}
-
-/* ---------- 电平表 ---------- */
-const METERS = [
-  ["inL", "in_rms", 0], ["outL", "out_rms", 0],
-  ["inR", "in_rms", 1], ["outR", "out_rms", 1],
+const STRIPS = [
+  { code:'01', title:'SPACE', desc:'SHELF (LIVE)', cols:3, items:[
+    { key:'shelf_db', label:'SHELF', unit:'dB', def:8, min:0, max:16, step:0.5 },
+    { key:'shelf_freq', label:'FREQ', unit:'Hz', def:250, min:80, max:600, step:10 },
+    { key:'shelf_s', label:'SLOPE', unit:'', def:1.79, min:0.5, max:3, step:0.01 },
+  ]},
+  { code:'02', title:'AGC', desc:'CLIP NORMALIZER', cols:4, items:[
+    { key:'agc', type:'toggle', label:'AGC ON', def:true },
+    { key:'clip', type:'toggle', label:'CLIP MODE', def:true },
+    { key:'ceiling', label:'CEIL', unit:'LUFS', def:-18.5, min:-35, max:-8, step:0.5 },
+    { key:'deadzone', label:'DEAD', unit:'dB', def:2, min:0, max:8, step:0.1 },
+    { key:'tau_down', label:'TAU ↓', unit:'s', def:0.15, min:0.01, max:2, step:0.01 },
+    { key:'tau_up', label:'TAU ↑', unit:'s', def:1.5, min:0.1, max:10, step:0.1 },
+    { key:'det_tau', label:'DET', unit:'s', def:1, min:0.05, max:5, step:0.05 },
+    { key:'activate', label:'ACT', unit:'LUFS', def:-50, min:-70, max:-20, step:1 },
+    { key:'hyst', label:'HYST', unit:'dB', def:3, min:0, max:12, step:0.5 },
+    { key:'gate', label:'GATE', unit:'LUFS', def:-70, min:-90, max:-20, step:1 },
+  ]},
+  { code:'03', title:'CLIP', desc:'PER-CLIP GAIN', cols:3, items:[
+    { key:'boost', label:'BOOST', unit:'dB', def:12, min:0, max:24, step:1 },
+    { key:'cut', label:'CUT', unit:'dB', def:18, min:0, max:36, step:1 },
+    { key:'init_db', label:'INIT', unit:'dB', def:-18, min:-36, max:0, step:0.5 },
+    { key:'clip_measure', label:'MEAS', unit:'s', def:0.6, min:0.1, max:4, step:0.1 },
+    { key:'clip_recheck', label:'RECHECK', unit:'s', def:0, min:0, max:120, step:1 },
+    { key:'limit_ceil', label:'LIMIT', unit:'', def:0.891, min:0.5, max:1, step:0.001 },
+  ]},
+  { code:'04', title:'GAP', desc:'CLIP BOUNDARY', cols:2, items:[
+    { key:'gap_dbfs', label:'LEVEL', unit:'dBFS', def:-50, min:-80, max:-20, step:1 },
+    { key:'gap_ms', label:'TIME', unit:'ms', def:200, min:50, max:1000, step:10 },
+  ]},
+  { code:'05', title:'MASTER', desc:'LIVE / TRANSPORT', cols:2, items:[] },
 ];
-const PK = [["pk-inL","in_peak",0],["pk-outL","out_peak",0],["pk-inR","in_peak",1],["pk-outR","out_peak",1]];
-function fmt(db) { return db <= -119 ? "-∞" : db.toFixed(1); }
-/* 表头手感: 上升立刻跟(不丢瞬态), 下落按每帧固定 dB 平滑(不抖),
-   峰值保持 1.6 秒再回落。配上 60 Hz 推送, 数字才是"细腻"而不是乱跳。 */
-const FALL_DB = 0.9;
-const HOLD_SEC = 1.6;
-const disp = {}, pkh = {}, pkt = {};
-function meterSet(id, db) {
-  const prev = disp[id];
-  const cur = (prev === undefined || db >= prev) ? db : Math.max(db, prev - FALL_DB);
-  disp[id] = cur;
-  el("bar-" + id).style.width = Math.max(0, Math.min(100, (cur + 60) / 60 * 100)) + "%";
-  el("val-" + id).textContent = fmt(cur);
-}
-function peakSet(id, db) {
-  const now = Date.now();
-  if (pkh[id] === undefined || db >= pkh[id]) {
-    pkh[id] = db;
-    pkt[id] = now + HOLD_SEC * 1000;
-  } else if (now > (pkt[id] || 0)) {
-    pkh[id] = Math.max(db, pkh[id] - FALL_DB);
-  }
-  el(id).textContent = pkh[id] <= -119 ? "" : fmt(pkh[id]);
-}
-function updateMeters(levels) {
-  if (!levels) return;
-  for (const [id, key, ch] of METERS) meterSet(id, (levels[key] || [-120, -120])[ch]);
-  for (const [id, key, ch] of PK) peakSet(id, (levels[key] || [-120, -120])[ch]);
-}
+const $ = (s) => document.querySelector(s);
+const controlId = (k) => 'p-' + k;
+let paramsLoaded = false;
+let postTimer = null;
 
-/* ---------- 归一化的电平与动态增益 ---------- */
-function updateLoud(ll) {
-  if (!ll) return;
-  const pkDb = 20 * Math.log10(Math.max(Math.max(ll.peak[0], ll.peak[1]), 1e-6));
-  const prev = disp["loud"];
-  const cur = (prev === undefined || pkDb >= prev) ? pkDb : Math.max(pkDb, prev - FALL_DB);
-  disp["loud"] = cur;
-  el("bar-loud").style.width = Math.max(0, Math.min(100, (cur + 60) / 60 * 100)) + "%";
-  el("loud-in").textContent = fmt(cur) + " dBFS";
-  const g = (ll.gain_db[0] + ll.gain_db[1]) / 2;      // 两声道共用同一增益
-  el("loud-gain-num").textContent = (g >= 0 ? "+" : "") + g.toFixed(2) + " dB";
-  // 推子: 量程 -18 ~ +12 dB, 0 dB 落在 60% 处(与刻度线对齐)
-  el("loud-gain").style.left = Math.max(0, Math.min(100, (g + 18) / 30 * 100)) + "%";
-}
-
-/* ---------- 实时推送(约 60 Hz) ---------- */
-/* DSP 的状态本来就每块更新一次(1024/96000 = 10.7 ms)。原来 250 ms 轮询把表和
-   数字拖成了幻灯片, 换成 SSE 推送后按帧渲染。 */
-const es = new EventSource("/api/stream");
-es.onmessage = (ev) => {
-  try { applyState(JSON.parse(ev.data)); } catch (err) { /* 坏帧忽略 */ }
-};
-es.onerror = () => say("面板与 DSP 失联, 重连中");
-
-function applyState(d) {
-  if (state === null) {
-    buildPresets();
-    buildVenues();
-    buildEq(d.freqs);
-    gains = d.gains.slice();
-    eqBox.querySelectorAll("input").forEach((inp) => {
-      inp.value = gains[+inp.dataset.index];
-      const v = inp.previousElementSibling;
-      const val = parseFloat(inp.value);
-      v.textContent = val === 0 ? "" : (val > 0 ? "+" : "") + val.toFixed(1);
-    });
-  }
-  if (!isBusy("vol")) { vol.value = d.volume_db; el("vol-num").textContent = (d.volume_db >= 0 ? "+" : "") + d.volume_db.toFixed(1) + " dB"; }
-  if (!isBusy("wet")) { wet.value = d.wet; el("wet-num").textContent = (+d.wet).toFixed(2); }
-  if (!isBusy("loud") && d.loudness) { loud.value = d.loudness.target_db; el("loud-num").textContent = (+d.loudness.target_db).toFixed(1) + " dB"; }
-  updateMeters(d.levels);
-  updateLoud(d.loudness_levels);
-  updateOutput(d.output);
-  state = d;
-}
-
-/* ---------- 输出设备 ---------- */
-/* 设备表只在变化时重建选项: SSE 是 60 Hz, 每帧重建 <select> 会把正在点的下拉打断。 */
-let outSig = "";
-function updateOutput(o) {
-  if (!o) return;
-  const sel = el("outdev");
-  const devs = o.devices || [];
-  const sig = JSON.stringify(devs.map((d) => [d.name, d.present]));
-  if (sig !== outSig) {
-    outSig = sig;
-    const keep = sel.dataset.touched ? sel.value : (o.device || "");
-    sel.innerHTML = "";
-    for (const d of devs) {
-      const op = document.createElement("option");
-      op.value = d.name;
-      op.textContent = (d.description || d.name) + (d.present ? "" : "（不在位）");
-      sel.appendChild(op);
+function buildConsole() {
+  const root = $('#console');
+  for (const strip of STRIPS) {
+    const sec = document.createElement('section');
+    sec.className = 'strip' + (strip.title === 'MASTER' ? ' master' : '');
+    sec.innerHTML = `<div class="strip-head"><div><div class="strip-title">${strip.title}</div><div class="strip-sub">${strip.desc}</div></div><span class="strip-index">${strip.code}</span></div>`;
+    const bank = document.createElement('div'); bank.className = 'fader-bank'; bank.style.setProperty('--cols', strip.cols);
+    const controls = document.createElement('div'); controls.className = 'strip-controls';
+    for (const it of strip.items) {
+      if (it.type === 'number' || !it.type) bank.appendChild(buildFader(it));
+      else controls.appendChild(buildControl(it));
     }
-    if (keep) sel.value = keep;
+    if (bank.children.length) sec.appendChild(bank);
+    if (controls.children.length) sec.appendChild(controls);
+    if (strip.title === 'MASTER') sec.appendChild(buildTransport());
+    root.appendChild(sec);
   }
-  if (!sel.dataset.touched && o.device) sel.value = o.device;
-  el("outstate").textContent = (o.routed && o.routed === o.device) ? "已挂载" : (o.routed ? "挂在别处" : "未挂载");
-  const cb = el("outmono");
-  if (!cb.dataset.touched) cb.checked = !!o.mono;
-  /* mono = 这台设备记住的模式; mono_active = 链路当前实际是什么 */
-  el("outmonostate").textContent = o.mono_active ? "单声道" : "立体声";
-  if (!!o.mono !== !!o.mono_active) el("outmonostate").textContent = "待应用";
-  el("outhint").textContent = o.note || "";
 }
-el("outmono").addEventListener("change", () => { el("outmono").dataset.touched = "1"; });
-el("outdev").addEventListener("change", () => { el("outdev").dataset.touched = "1"; });
-el("outapply").addEventListener("click", async () => {
-  const name = el("outdev").value;
-  if (!name) return;
-  const mono = el("outmono").checked;
-  const r = await fetch("/api/device", {
-    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name, mono})});
-  const d = await r.json().catch(() => ({}));
-  say(d.ok ? ("输出设备: " + (d.message || name)) : ("切换失败: " + (d.error || "未知错误")));
-  el("outdev").dataset.touched = "";
-  el("outmono").dataset.touched = "";
-  if (d.output) updateOutput(d.output);
+function buildFader(it) {
+  const wrap = document.createElement('div'); wrap.className = 'chan';
+  const id = controlId(it.key); const def = it.def ?? '';
+  wrap.innerHTML = `
+    <label class="chan-label" for="${id}">${it.label}<span class="chan-unit">${it.unit || ''}</span></label>
+    <div class="readout"><input type="number" id="${id}" value="${def}" min="${it.min}" max="${it.max}" step="${it.step}" aria-label="${it.label}"></div>
+    <div class="fader"><span class="scale"></span><input type="range" min="${it.min}" max="${it.max}" step="${it.step}" value="${def}" aria-label="${it.label} 推子"></div>`;
+  const num = wrap.querySelector('input[type=number]'), rng = wrap.querySelector('input[type=range]');
+  rng.addEventListener('input', () => { num.value = rng.value; });
+  num.addEventListener('input', () => { if (num.value !== '') rng.value = num.value; });
+  return wrap;
+}
+function buildControl(it) {
+  if (it.type === 'toggle') {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'sw' + (it.key === 'agc' ? ' accent' : '');
+    b.id = controlId(it.key); b.setAttribute('aria-pressed', it.def ? 'true' : 'false');
+    b.innerHTML = `<span>${it.label}</span><span class="sw-state">${it.def ? 'ON' : 'OFF'}</span>`;
+    return b;
+  }
+  const d = document.createElement('div'); d.className = 'row';
+  d.innerHTML = `<label for="${controlId(it.key)}">${it.label}</label><div class="row-ctl"><select id="${controlId(it.key)}">${it.options.map(([v,t]) => `<option value="${v}">${t}</option>`).join('')}</select></div>`;
+  d.querySelector('select').value = String(it.def);
+  return d;
+}
+function buildTransport() {
+  const d = document.createElement('div'); d.className = 'transport';
+  d.innerHTML = `
+    <div class="row" style="margin-bottom:6px"><label for="outputSel">OUTPUT</label><div class="row-ctl"><select id="outputSel" style="max-width:128px"></select><button class="mini" id="scanOut" type="button">扫描</button></div></div>
+    <div class="mono-note" id="monoNote">—</div>
+    <div class="meter-pair">
+      <div class="meter-block"><div class="meter"><div class="fill" id="meterL"></div></div><span>L</span></div>
+      <div class="meter-block"><div class="meter"><div class="fill" id="meterR"></div></div><span>R</span></div>
+    </div>
+    <button class="transport-btn" id="startBtn" type="button">START / 启动链路</button>
+    <button class="transport-btn" id="stopBtn" type="button" style="margin-top:6px;background:transparent;color:var(--ink)">STOP / 停止</button>
+    <div class="status-line"><span class="pill" id="chainPill">未运行</span><span id="chainSub">—</span></div>`;
+  return d;
+}
+function val(key) {
+  const el = document.getElementById(controlId(key));
+  if (!el) return undefined;
+  if (el.classList.contains('sw')) return el.getAttribute('aria-pressed') === 'true';
+  if (el.type === 'number') return el.value === '' ? null : Number(el.value);
+  return el.value;
+}
+function setVal(key, v) {
+  const el = document.getElementById(controlId(key)); if (!el) return;
+  if (el.classList.contains('sw')) {
+    const on = !!v; el.setAttribute('aria-pressed', on);
+    const st = el.querySelector('.sw-state'); if (st) st.textContent = on ? 'ON' : 'OFF';
+    return;
+  }
+  if (v === null || v === undefined) el.value = ''; else el.value = String(v);
+  const wrap = el.closest('.chan') || el.closest('.row');
+  const rng = wrap ? wrap.querySelector('input[type="range"]') : null;
+  if (rng) rng.value = String(v);
+}
+function collect() {
+  const p = {};
+  for (const strip of STRIPS) for (const it of strip.items) p[it.key] = val(it.key);
+  return p;
+}
+function schedulePost() {
+  if (!paramsLoaded) return;
+  clearTimeout(postTimer);
+  postTimer = setTimeout(async () => {
+    try {
+      await fetch('/api/params', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(collect()) });
+    } catch {}
+  }, 220);
+}
+
+// ---------- live ----------
+let history = [];
+let lastLive = null;
+async function pollLive() {
+  try {
+    const r = await fetch('/api/live');
+    const j = await r.json();
+    lastLive = j;
+    $('#liveDot').className = 'live-dot' + (j.running ? ' on' : '');
+    $('#liveLabel').textContent = j.running ? 'LIVE' : '未运行';
+    $('#kJoint').innerHTML = j.running && j.lufs > -100 ? `${j.lufs.toFixed(1)}<small>LUFS</small>` : '—';
+    $('#kSource').innerHTML = j.running && j.dry_lufs > -100 ? `${j.dry_lufs.toFixed(1)}<small>LUFS</small>` : '—';
+    $('#kGain').innerHTML = j.running ? `${j.gain_db.toFixed(1)}<small>dB</small>` : '—';
+    const clipText = j.clip_state === 0 ? 'WAIT' : j.clip_state === 1 ? 'MEASURE' : j.clip_state === 2 ? 'HOLD' : '—';
+    $('#kClip').textContent = j.running ? clipText : '—';
+    const lamp = document.getElementById('lamp'), lampLabel = document.getElementById('lampLabel');
+    if (lamp) {
+      let cls = 'red', txt = 'OFF';
+      if (j.running) {
+        if (j.gap_active || j.clip_state === 0 || j.clip_state === 1) { cls = 'yellow'; txt = 'WAIT'; }
+        else { cls = 'green'; txt = 'LIVE'; }
+      }
+      lamp.className = 'lamp ' + cls;
+      if (lampLabel) lampLabel.textContent = txt;
+    }
+    $('#kGap').textContent = j.gap_active ? 'GAP' : '—';
+    $('#kLR').innerHTML = j.running ? `${j.lufs_l.toFixed(0)} / ${j.lufs_r.toFixed(0)}` : '—';
+    $('#kSeq').textContent = j.running ? String(j.seq) : '—';
+    const pct = (v) => Math.max(0, Math.min(1, (v + 60) / 60));
+    const ml = document.getElementById('meterL'), mr = document.getElementById('meterR');
+    if (ml) ml.style.height = (pct(j.lufs_l) * 100).toFixed(1) + '%';
+    if (mr) mr.style.height = (pct(j.lufs_r) * 100).toFixed(1) + '%';
+    if (j.running) {
+      const now = performance.now() / 1000;
+      history.push({ t: now, gain: j.gain_db, lufs: j.lufs });
+      while (history.length && now - history[0].t > 30) history.shift();
+    }
+    const stateMap = { 0:'WAIT', 1:'MEASURE', 2:'HOLD' };
+    const state = $('#bigState');
+    if (state) {
+      state.innerHTML = `${j.running ? (stateMap[j.clip_state] || '—') : '—'}<small>${j.running ? (j.gap_active ? '干声间隙中' : '节目内容') : '等待链路'}</small>`;
+    }
+    const detail = $('#stateDetail');
+    if (detail) {
+      detail.innerHTML = `
+        <div class="k">片段状态</div><div class="v">${j.running ? (stateMap[j.clip_state] || '—') : '—'}</div>
+        <div class="k">间隙 epoch</div><div class="v">${j.gap_epoch}</div>
+        <div class="k">片段测量 干 / 湿</div><div class="v">${j.running && j.dry_clip > -100 ? j.dry_clip.toFixed(1) : '—'} / ${j.running && j.wet_clip > -100 ? j.wet_clip.toFixed(1) : '—'} LUFS</div>
+        <div class="k">搁架模型 / 湿</div><div class="v">${j.running && j.shelf_clip > -100 ? j.shelf_clip.toFixed(1) : '—'} / ${j.running && j.wet_clip > -100 ? j.wet_clip.toFixed(1) : '—'} LUFS</div>
+        <div class="k">校验 干 / 湿</div><div class="v">${j.running && j.verify_dry > -100 ? j.verify_dry.toFixed(1) : '—'} / ${j.running && j.verify_wet > -100 ? j.verify_wet.toFixed(1) : '—'} LUFS</div>
+        <div class="k">校验 搁架 / 湿</div><div class="v">${j.running && j.verify_shelf > -100 ? j.verify_shelf.toFixed(1) : '—'} / ${j.running && j.verify_wet > -100 ? j.verify_wet.toFixed(1) : '—'} LUFS</div>
+        <div class="k">房间传递</div><div class="v">${j.running && j.transfer > -100 ? (j.transfer >= 0 ? '+' : '') + j.transfer.toFixed(1) : '—'} LU</div>
+        <div class="k">低频占比 / 模型</div><div class="v">${j.running && j.bass_ratio > -50 ? j.bass_ratio.toFixed(1) + ' dB' : '—'} / ${j.model_valid ? 'ON' : 'OFF'}</div>
+        <div class="k">干声块响度</div><div class="v">${j.running && j.dry_block > -100 ? j.dry_block.toFixed(1) + ' LUFS' : '—'}</div>
+        <div class="k">Block 响度</div><div class="v">${j.running && j.l_block > -100 ? j.l_block.toFixed(1) + ' LUFS' : '—'}</div>
+        <div class="k">平滑响度</div><div class="v">${j.running && j.l_smooth > -100 ? j.l_smooth.toFixed(1) + ' LUFS' : '—'}</div>`;
+    }
+    drawCharts();
+  } catch (e) {
+    $('#liveDot').className = 'live-dot';
+    $('#liveLabel').textContent = '未连接';
+  }
+  setTimeout(pollLive, 220);
+}
+
+// ---------- status ----------
+async function pollStatus() {
+  try {
+    const r = await fetch('/api/status');
+    const s = await r.json();
+    const pill = $('#chainPill');
+    const running = s.processes >= 3 && s.default_sink === 'collaplex_rt_sink';
+    if (pill) { pill.className = 'pill' + (running ? ' on' : ''); pill.textContent = running ? '运行中' : '未运行'; }
+    if ($('#chainSub')) $('#chainSub').textContent = `${s.processes} 进程 · ${s.hw_rate || '—'} Hz`;
+    const head = $('#headStatus'); if (head) { head.textContent = running ? '运行中' : '待机'; head.dataset.kind = running ? 'ok' : 'idle'; }
+    $('#monMeta').textContent = s.default_sink ? `默认: ${s.default_sink}` : '未运行';
+    const chain = $('#chainStatus');
+    if (chain) {
+      chain.innerHTML = `
+        <div class="k">默认输出</div><div class="v">${shortNode(s.default_sink)}</div>
+        <div class="k">硬件输出</div><div class="v">${shortNode(s.target)}</div>
+        <div class="k">硬件采样率</div><div class="v">${s.hw_rate ? s.hw_rate + ' Hz' : '—'}</div>
+        <div class="k">DSP 进程</div><div class="v">${s.processes}</div>
+        <div class="k">节点</div><div class="v">${s.nodes.map(shortNode).join(' · ') || '—'}</div>
+        <div class="k">CTL 版本</div><div class="v">${s.ctl_version}</div>`;
+    }
+  } catch {}
+  setTimeout(pollStatus, 2500);
+}
+function shortNode(n) {
+  if (!n) return '—';
+  if (n.includes('collaplex_rt_sink')) return 'RT SINK';
+  if (n.includes('Fit900NB')) return 'EDIFIER';
+  return n.replace('collaplex_', '').slice(0, 18);
+}
+
+// ---------- charts ----------
+function setup(canvas) {
+  const r = canvas.getBoundingClientRect(); const dpr = Math.max(1, devicePixelRatio || 1);
+  canvas.width = Math.max(1, Math.round(r.width * dpr)); canvas.height = Math.max(1, Math.round(r.height * dpr));
+  const ctx = canvas.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,r.width,r.height);
+  return { ctx, w: r.width, h: r.height };
+}
+function niceStep(x) { const p = Math.pow(10, Math.floor(Math.log10(Math.max(x,1e-9)))); const n = x/p; return (n<=1?1:n<=2?2:n<=5?5:10)*p; }
+function ticks(min,max,count){ const step=niceStep((max-min)/Math.max(1,count)); const first=Math.ceil(min/step)*step; const out=[]; for(let v=first;v<=max+1e-9;v+=step) out.push(v); return out; }
+function text(ctx,s,x,y,color,size=9,align='left'){ ctx.fillStyle=color; ctx.font=`${size}px ${getComputedStyle(document.body).fontFamily}`; ctx.textAlign=align; ctx.textBaseline='middle'; ctx.fillText(s,x,y); }
+function line(ctx,x1,y1,x2,y2){ ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); }
+function curvePath(ctx, pts) {
+  if (!pts.length) return; ctx.moveTo(pts[0].x, pts[0].y);
+  if (pts.length < 3) { for (let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x,pts[i].y); return; }
+  const n=pts.length, dx=[], dy=[], m=[];
+  for (let i=0;i<n-1;i++){ dx[i]=pts[i+1].x-pts[i].x; dy[i]=pts[i+1].y-pts[i].y; }
+  const slope=(i)=>dx[i]===0?0:dy[i]/dx[i];
+  m[0]=slope(0); m[n-1]=slope(n-2);
+  for (let i=1;i<n-1;i++){ const s0=slope(i-1), s1=slope(i); if (s0*s1<=0) m[i]=0; else { const w1=2*dx[i]+dx[i-1], w2=dx[i]+2*dx[i-1]; m[i]=(w1+w2)/(w1/s0+w2/s1); } }
+  for (let i=0;i<n-1;i++){ const x1=pts[i].x,y1=pts[i].y,x2=pts[i+1].x,y2=pts[i+1].y,h=dx[i]; ctx.bezierCurveTo(x1+h/3,y1+m[i]*h/3,x2-h/3,y2-m[i+1]*h/3,x2,y2); }
+}
+function drawHistory(canvasId, tipId, key, color, fill, ref, refLabel) {
+  const canvas = $(canvasId); if (!canvas) return;
+  const { ctx, w, h } = setup(canvas);
+  const pad = { l: 40, r: 10, t: 10, b: 22 };
+  const areaW = w-pad.l-pad.r, areaH = h-pad.t-pad.b;
+  const pts = history.map(p => ({ x: p.t, y: p[key] })).filter(p => Number.isFinite(p.y));
+  if (pts.length < 2) { return; }
+  const now = pts[pts.length-1].x, xmin = now - 30;
+  let ymin = Math.min(...pts.map(p=>p.y)), ymax = Math.max(...pts.map(p=>p.y));
+  if (ref != null) { ymin=Math.min(ymin,ref); ymax=Math.max(ymax,ref); }
+  const span = Math.max(0.5, ymax-ymin); ymin-=span*.1; ymax+=span*.1;
+  const X = x => pad.l + ((x-xmin)/30)*areaW;
+  const Y = y => pad.t + (1-(y-ymin)/(ymax-ymin))*areaH;
+  for (const v of ticks(ymin,ymax,4)) { ctx.strokeStyle=C.grid; line(ctx,pad.l,Y(v),pad.l+areaW,Y(v)); text(ctx,v.toFixed(0),pad.l-6,Y(v),C.muted,9,'right'); }
+  for (let s=-30;s<=0;s+=10) text(ctx, s===0?'now':s+'s', pad.l+(s+30)/30*areaW, h-pad.b+9, C.muted, 9, s===-30?'left':s===0?'right':'center');
+  ctx.strokeStyle=C.axis; line(ctx,pad.l,h-pad.b,pad.l+areaW,h-pad.b);
+  if (ref != null) { ctx.strokeStyle=C.muted; line(ctx,pad.l,Y(ref),pad.l+areaW,Y(ref)); if (refLabel) text(ctx,refLabel,pad.l+3,Math.max(pad.t+8,Y(ref)-7),C.muted,8.5,'left'); }
+  const pix = pts.map(p => ({ x: X(p.x), y: Y(p.y) }));
+  ctx.beginPath(); curvePath(ctx,pix); ctx.strokeStyle=color; ctx.lineWidth=2; ctx.lineJoin='round'; ctx.lineCap='round'; ctx.stroke();
+  ctx.lineTo(pix[pix.length-1].x,pad.t+areaH); ctx.lineTo(pix[0].x,pad.t+areaH); ctx.closePath(); ctx.fillStyle=fill; ctx.fill();
+  canvas._geom = { pad, areaW, areaH, xmin, pts, X, Y };
+}
+function drawCharts() {
+  drawHistory('#gainChart','#tip-gain','gain',C.s2,'rgba(217,89,38,.10)',0,'0 dB');
+  const ceil = lastLive && lastLive.running && lastLiveParams ? lastLiveParams.ceiling : null;
+  drawHistory('#loudChart','#tip-loud','lufs',C.s1,'rgba(42,120,214,.10)',ceil, ceil != null ? `CEIL ${ceil} LUFS` : '');
+  const eg = $('#emptyGain'), el = $('#emptyLoud');
+  if (eg) eg.style.display = history.length < 2 ? 'flex' : 'none';
+  if (el) el.style.display = history.length < 2 ? 'flex' : 'none';
+}
+
+
+
+// ---------- output device ----------
+let outputsCache = [], outputsTarget = '', targetsPresent = true;
+async function loadOutputs() {
+  try {
+    const r = await fetch('/api/outputs');
+    const j = await r.json();
+    outputsCache = j.outputs || [];
+    outputsTarget = j.target || '';
+    targetsPresent = !!j.target_present;
+    const sel = document.getElementById('outputSel'); if (!sel) return;
+    sel.innerHTML = outputsCache.map(o => `<option value="${o.name}" ${o.name === j.target ? 'selected' : ''}>${o.description || o.name}${o.mono ? ' · MONO' : ''}</option>`).join('');
+    updateMonoNote();
+  } catch {}
+}
+function updateMonoNote() {
+  const sel = document.getElementById('outputSel'); const note = document.getElementById('monoNote');
+  if (!sel || !note) return;
+  const o = outputsCache.find(x => x.name === sel.value);
+  note.textContent = o ? (o.mono ? '单声道设备 → 单声道混合' : '立体声设备 → 立体声直出') : '—';
+}
+async function switchOutput() {
+  const sel = document.getElementById('outputSel'); if (!sel) return;
+  const o = outputsCache.find(x => x.name === sel.value);
+  const mono = !!(o && o.mono);
+  sel.disabled = true;
+  const note = document.getElementById('monoNote'); if (note) note.textContent = '切换中，PipeWire 会重启…';
+  try {
+    const r = await fetch('/api/output', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: sel.value, mono }) });
+    if (!r.ok) { const t = await r.text(); if (note) note.textContent = '切换失败：' + t.slice(0, 90); }
+  } catch {}
+  setTimeout(async () => { sel.disabled = false; await loadOutputs(); await pollStatus(); }, 7000);
+}
+
+async function scanOutputs() {
+  await loadOutputs();
+  const note = document.getElementById('monoNote');
+  if (!outputsCache.length) {
+    if (note) note.textContent = '没有可用输出设备 —— 链路已停止';
+    await chainAction('stop');
+    return;
+  }
+  if (!targetsPresent) {
+    if (note) note.textContent = '之前选择的设备不在位 —— 链路已停止';
+    await chainAction('stop');
+    return;
+  }
+  if (note) note.textContent = `扫描完成 · ${outputsCache.length} 个设备`;
+}
+
+// ---------- visualizer ----------
+const VU_MIN = -40, VU_MAX = 0;
+function drawSpectrum(spec) {
+  const canvas = document.getElementById('specCanvas'); if (!canvas) return;
+  const { ctx, w, h } = setup(canvas);
+  const pad = { l: 30, r: 8, t: 8, b: 18 };
+  const areaW = w - pad.l - pad.r, areaH = h - pad.t - pad.b;
+  const dbMin = -80, dbMax = 0;
+  const Y = d => pad.t + (1 - (Math.max(dbMin, Math.min(dbMax, d)) - dbMin) / (dbMax - dbMin)) * areaH;
+  for (const d of [-20, -40, -60]) {
+    ctx.strokeStyle = C.grid; line(ctx, pad.l, Y(d), pad.l + areaW, Y(d));
+    text(ctx, String(d), pad.l - 5, Y(d), C.muted, 8, 'right');
+  }
+  const colors = ['#cde2fb', '#86b6ef', '#3987e5', '#256abf', '#184f95'];
+  const n = spec.length; if (!n) return;
+  const bw = Math.max(2, (areaW / n) * 0.62);
+  spec.forEach((p, i) => {
+    const x = pad.l + (i + 0.5) * (areaW / n);
+    const y = Y(p.db);
+    const t = Math.max(0, Math.min(1, (p.db - dbMin) / (dbMax - dbMin)));
+    ctx.fillStyle = colors[Math.min(colors.length - 1, Math.floor(t * colors.length))];
+    ctx.fillRect(x - bw / 2, y, bw, Math.max(1, pad.t + areaH - y));
+  });
+  ctx.strokeStyle = C.axis; line(ctx, pad.l, pad.t + areaH, pad.l + areaW, pad.t + areaH);
+  for (const [f, label] of [[20, '20'], [100, '100'], [1000, '1k'], [10000, '10k'], [20000, '20k']]) {
+    const x = pad.l + (Math.log(f / 20) / Math.log(1000)) * areaW;
+    text(ctx, label, x, h - pad.b + 9, C.muted, 8, 'center');
+  }
+}
+function drawScope(wave) {
+  const canvas = document.getElementById('scopeCanvas'); if (!canvas) return;
+  const { ctx, w, h } = setup(canvas);
+  const pad = { l: 8, r: 8, t: 8, b: 8 };
+  const areaW = w - pad.l - pad.r, areaH = h - pad.t - pad.b;
+  const mid = pad.t + areaH / 2;
+  ctx.strokeStyle = C.grid; line(ctx, pad.l, mid, pad.l + areaW, mid);
+  line(ctx, pad.l, pad.t, pad.l, pad.t + areaH);
+  if (!wave || wave.length < 2) return;
+  let peak = 0; for (const v of wave) peak = Math.max(peak, Math.abs(v));
+  const scale = (areaH / 2) * 0.85 / Math.max(peak, 0.02);
+  ctx.beginPath();
+  wave.forEach((v, i) => {
+    const x = pad.l + (i / (wave.length - 1)) * areaW;
+    const y = mid - v * scale;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = C.s1; ctx.lineWidth = 1.5; ctx.lineJoin = 'round'; ctx.stroke();
+}
+function setVu(id, db) {
+  const el = document.getElementById(id); if (!el) return;
+  const t = Math.max(0, Math.min(1, (db - VU_MIN) / (VU_MAX - VU_MIN)));
+  const angle = -70 + t * 140;
+  el.setAttribute('transform', `rotate(${angle.toFixed(1)} 50 62)`);
+}
+async function pollScope() {
+  try {
+    const r = await fetch('/api/scope');
+    const s = await r.json();
+    drawSpectrum(s.spec);
+    drawScope(s.wave);
+    setVu('needleL', s.rms[0]);
+    setVu('needleR', s.rms[1]);
+    const spinning = !!(lastLive && lastLive.running) && Math.max(s.rms[0], s.rms[1]) > -45;
+    document.getElementById('needleG')?.classList.toggle('spinning', spinning);
+    const ds = document.getElementById('discState');
+    if (ds) ds.textContent = spinning ? 'PLAY' : 'IDLE';
+  } catch {}
+  setTimeout(pollScope, 70);
+}
+
+// ---------- params ----------
+async function loadParams() {
+  try {
+    const r = await fetch('/api/params');
+    const p = await r.json();
+    for (const [k,v] of Object.entries(p)) setVal(k,v);
+    lastLiveParams = p;
+    paramsLoaded = true;
+  } catch {}
+}
+let lastLiveParams = null;
+
+// ---------- actions ----------
+async function chainAction(act) {
+  const btn = act === 'start' ? $('#startBtn') : $('#stopBtn');
+  if (btn) { btn.disabled = true; btn.textContent = act === 'start' ? '启动中…' : '停止中…'; }
+  try {
+    await fetch('/api/action', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({action:act}) });
+  } catch {}
+  setTimeout(async () => {
+    await loadParams();
+    if (act === 'start' && $('#startBtn')) { $('#startBtn').disabled=false; $('#startBtn').textContent='START / 启动链路'; }
+    if (act === 'stop' && $('#stopBtn')) { $('#stopBtn').disabled=false; $('#stopBtn').textContent='STOP / 停止'; }
+  }, 4000);
+}
+
+// ---------- init ----------
+buildConsole();
+const consoleEl = $('#console');
+consoleEl.addEventListener('input', schedulePost);
+consoleEl.addEventListener('change', schedulePost);
+consoleEl.addEventListener('click', (e) => {
+  const sw = e.target.closest('.sw');
+  if (sw) {
+    const on = sw.getAttribute('aria-pressed') !== 'true';
+    sw.setAttribute('aria-pressed', on);
+    const st = sw.querySelector('.sw-state'); if (st) st.textContent = on ? 'ON' : 'OFF';
+    schedulePost();
+  }
 });
-/* 换模式必重建链路(末段节点是部署期定的), 所以勾选后直接提交, 等 10 秒 */
-el("outmono").addEventListener("change", async () => {
-  const o = (state && state.output) || {};
-  const name = el("outdev").value || o.device;
-  if (!name) return;
-  const mono = el("outmono").checked;
-  say(mono ? "切到单声道混合, 正在重建链路(约 10 秒)…" : "切回立体声, 正在重建链路(约 10 秒)…");
-  const r = await fetch("/api/device", {
-    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name, mono})});
-  const d = await r.json().catch(() => ({}));
-  say(d.ok ? (d.message || "已切换") : ("切换失败: " + (d.error || "未知错误")));
-  el("outmono").dataset.touched = "";
-  if (d.output) updateOutput(d.output);
-});
-el("flat").addEventListener("click", () => { gains = new Array(32).fill(0); commitEq(); markPreset("平直"); markVenue(null); buildEq(state ? state.freqs : []); });
-el("reset").addEventListener("click", () => { state = null; fetch("/api/state").then(r => r.json()).then(applyState).catch(() => say("面板与 DSP 失联")); });
-fetch("/api/state").then(r => r.json()).then(applyState).catch(() => say("面板与 DSP 失联"));
+$('#startBtn')?.addEventListener('click', () => chainAction('start'));
+$('#stopBtn')?.addEventListener('click', () => chainAction('stop'));
+$('#outputSel')?.addEventListener('change', switchOutput);
+$('#scanOut')?.addEventListener('click', scanOutputs);
+window.addEventListener('resize', drawCharts);
+loadParams();
+loadOutputs();
+pollLive();
+pollStatus();
+pollScope();
 </script>
 </body>
 </html>

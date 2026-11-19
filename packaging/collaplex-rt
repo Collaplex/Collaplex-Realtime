@@ -1,0 +1,111 @@
+#!/bin/sh
+# Collaplex RT —— deb 版起停命令
+set -eu
+
+ROOT=/usr/share/collaplex-rt
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/pipewire/pipewire.conf.d"
+STATE_DIR="$HOME/.local/state/collaplex-rt"
+
+kill_dsp() {
+    for p in /proc/[0-9]*; do
+        [ -r "$p/cmdline" ] || continue
+        c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null) || continue
+        case "$c" in
+            *collaplex-realtime*) kill -9 "${p#/proc/}" 2>/dev/null || true;;
+        esac
+    done
+}
+
+case "${1:-}" in
+start)
+    bash "$ROOT/install.sh"
+    "$0" web
+    ;;
+stop)
+    echo "[Collaplex RT] 停止链路..."
+    if [ -f "$STATE_DIR/watch.pid" ]; then
+        W=$(cat "$STATE_DIR/watch.pid" 2>/dev/null || true)
+        case "$W" in ''|*[!0-9]*) ;; *) kill "$W" 2>/dev/null || true;; esac
+        rm -f "$STATE_DIR/watch.pid"
+    fi
+    pkill -f "$ROOT/scripts/target-watch.sh" 2>/dev/null || true
+    rm -f "$STATE_DIR/chain-state"
+    rm -f "$CONF_DIR/10-rt-hrtf.conf" "$CONF_DIR/20-rt-dsp.conf" "$CONF_DIR/91-rt-clock.conf"
+    kill_dsp
+    rm -f /dev/shm/collaplex-rt-agc /dev/shm/collaplex-rt-agc.lock* \
+          /dev/shm/collaplex-rt-gap /dev/shm/collaplex-rt-ctl /dev/shm/collaplex-rt-scope
+    systemctl --user restart pipewire pipewire-pulse wireplumber
+    sleep 3
+    T=$(cat "$STATE_DIR/target" 2>/dev/null || true)
+    if [ -n "$T" ]; then
+        ID=$(/usr/bin/python3 - "$T" <<'PY'
+import json, subprocess, sys
+name = sys.argv[1]
+try:
+    data = json.loads(subprocess.check_output(["pw-dump"], stderr=subprocess.DEVNULL))
+except Exception:
+    print(""); raise SystemExit
+for n in data:
+    if n.get("type") != "PipeWire:Interface:Node":
+        continue
+    p = n.get("info", {}).get("props", {})
+    if p.get("node.name") == name:
+        print(n.get("id", ""))
+        break
+PY
+)
+        if [ -n "$ID" ]; then wpctl set-default "$ID" >/dev/null 2>&1 || true; fi
+    fi
+    echo "已停止。默认输出: $(wpctl inspect @DEFAULT_SINK@ 2>/dev/null | sed -n 's/.*node.name = //p' | head -1)"
+    ;;
+web)
+    if pgrep -f 'collaplex-rt-web' >/dev/null 2>&1; then
+        echo "控制台已在运行: http://127.0.0.1:8791"
+    else
+        setsid nohup /usr/bin/collaplex-rt-web --port 8791 >/dev/null 2>&1 < /dev/null &
+        sleep 1
+        echo "控制台: http://127.0.0.1:8791"
+    fi
+    ;;
+status)
+    echo -n "节点: "; pw-dump 2>/dev/null | grep -o '"node.name": "collaplex[^"]*"' | sort -u | tr '\n' ' '; echo
+    n=0
+    for p in /proc/[0-9]*; do
+        [ -r "$p/cmdline" ] || continue
+        c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null) || continue
+        case "$c" in *collaplex-realtime*) n=$((n+1));; esac
+    done
+    echo "DSP/间隙进程数: $n"
+    echo -n "链路状态: "; cat "$STATE_DIR/chain-state" 2>/dev/null || echo "(未运行 / 待命)"
+    W=""
+    [ -f "$STATE_DIR/watch.pid" ] && W=$(cat "$STATE_DIR/watch.pid" 2>/dev/null || true)
+    case "$W" in ''|*[!0-9]*) W="";; esac
+    if [ -n "$W" ] && kill -0 "$W" 2>/dev/null; then
+        echo "设备监视: 运行中 (pid $W)"
+    else
+        echo "设备监视: 未运行"
+    fi
+    echo -n "默认输出: "; wpctl inspect @DEFAULT_SINK@ 2>/dev/null | sed -n 's/.*node.name = "\(.*\)"/\1/p' | head -1
+    T=$(cat "$STATE_DIR/target" 2>/dev/null || true)
+    if [ -n "$T" ]; then
+        if pw-dump 2>/dev/null | grep -qF "\"node.name\": \"$T\""; then
+            echo "目标设备: $T (在位)"
+        else
+            echo "目标设备: $T (不在位)"
+        fi
+    else
+        echo "目标设备: (未记录)"
+    fi
+    ;;
+*)
+    cat <<'EOF'
+用法: collaplex-rt <命令>
+
+  start    启动实时链路（设备不在位时待命，接上后自动激活）
+  stop     停止链路，恢复硬件输出
+  web      启动实时控制台 (http://127.0.0.1:8791)
+  status   查看节点/进程/默认输出
+EOF
+    exit 1
+    ;;
+esac

@@ -1,85 +1,88 @@
 #!/bin/bash
-# 把 collaplex-audio 打成 deb 包(纯脚本 + 数据, Architecture: all)
+# 把 Collaplex RT 打成 deb（预编译二进制 + 素材 + PipeWire 模板）
 #
-#   bash build-deb.sh              默认读 VERSION 文件
-#   VER=1.0.3 bash build-deb.sh    临时指定版本(不写回 VERSION)
+#   bash build-deb.sh              读 VERSION
+#   VER=0.1.1 bash build-deb.sh    临时指定版本
 #
-# 产物: dist/collaplex-audio_<版本>_all.deb
-#
-# 说明: 装到 /usr/share/collaplex-audio, 只提供 /usr/bin/collaplex-audio 一个入口。
-#       不带 venv(依赖系统 python3-numpy / python3-scipy), 不装到 pipewire 配置目录 ——
-#       也就是说**装完不会自动启用**, 要手动 collaplex-audio start, 也不做开机自启。
+# 产物: dist/collaplex-rt_<版本>_amd64.deb
+# 装完不会自动接管；手动 collaplex-rt start。
 set -eu
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-VER="${VER:-$(tr -d " \t\n" < "$ROOT/VERSION")}"
+VER="${VER:-$(tr -d ' \t\n' < "$ROOT/VERSION")}"
 OUT="$ROOT/dist"
-PKG="collaplex-audio_${VER}_all"
+PKG="collaplex-rt_${VER}_amd64"
 STAGE="$OUT/$PKG"
 
-echo "=== 打包 collaplex-audio $VER ==="
-rm -rf "$STAGE"
-mkdir -p "$STAGE/DEBIAN" "$STAGE/usr/share/collaplex-audio" "$STAGE/usr/bin"
+[ -x "$ROOT/target/release/collaplex-realtime" ] || {
+    echo "先构建: cargo build --release" >&2
+    exit 1
+}
+[ -x "$ROOT/target/release/rt-web" ] || {
+    echo "缺少 target/release/rt-web" >&2
+    exit 1
+}
 
-# ---- 源码 ----
-for d in dsp bin pipewire web hrir reverb scripts systemd doc; do
-    cp -a "$ROOT/$d" "$STAGE/usr/share/collaplex-audio/"
-done
-cp "$ROOT/README.md" "$STAGE/usr/share/collaplex-audio/"
-cp "$ROOT/LICENSE" "$ROOT/LICENSING.md" "$STAGE/usr/share/collaplex-audio/"
-# 备份文件不入包(IR 的 .orig / .pre-eq 备份只留在源码树里)
-find "$STAGE" \( -name "*.orig.wav" -o -name "*.pre-eq.wav" \) -delete
-find "$STAGE/usr/share" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+echo "=== 打包 collaplex-rt $VER ==="
+rm -rf "$STAGE"
+mkdir -p "$STAGE/DEBIAN" "$STAGE/usr/bin" "$STAGE/usr/share/collaplex-rt" \
+         "$STAGE/usr/share/collaplex-rt/scripts"
+
+install -m 755 "$ROOT/target/release/collaplex-realtime" "$STAGE/usr/bin/collaplex-realtime"
+install -m 755 "$ROOT/target/release/rt-web" "$STAGE/usr/bin/collaplex-rt-web"
+install -m 755 "$ROOT/packaging/collaplex-rt" "$STAGE/usr/bin/collaplex-rt"
+install -m 755 "$ROOT/packaging/collaplex-rt-dsp" "$STAGE/usr/bin/collaplex-rt-dsp"
+install -m 755 "$ROOT/packaging/collaplex-rt-gap" "$STAGE/usr/bin/collaplex-rt-gap"
+install -m 755 "$ROOT/packaging/collaplex-rt-gap-r" "$STAGE/usr/bin/collaplex-rt-gap-r"
+install -m 755 "$ROOT/packaging/install.sh" "$STAGE/usr/share/collaplex-rt/install.sh"
+install -m 755 "$ROOT/scripts/chain-lib.sh" "$STAGE/usr/share/collaplex-rt/scripts/chain-lib.sh"
+install -m 755 "$ROOT/scripts/target-watch.sh" "$STAGE/usr/share/collaplex-rt/scripts/target-watch.sh"
+
+cp -a "$ROOT/assets" "$ROOT/pipewire" "$STAGE/usr/share/collaplex-rt/"
+cp "$ROOT/README.md" "$ROOT/LICENSE" "$ROOT/LICENSING.md" "$ROOT/NOTICE" "$ROOT/VERSION" "$STAGE/usr/share/collaplex-rt/"
 chmod -R a+rX "$STAGE/usr/share"
 
-# ---- 版权文件(deb 合规) ----
-DOC="$STAGE/usr/share/doc/collaplex-audio"
+DOC="$STAGE/usr/share/doc/collaplex-rt"
 mkdir -p "$DOC"
 cat > "$DOC/copyright" <<'EOF'
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: collaplex-audio
-Source: https://collaplex.me/git/edgevoid/collaplex-audio
+Upstream-Name: collaplex-rt
+Source: https://collaplex.me/git/edgevoid/collaplex-realtime
 
 Files: *
 Copyright: 2026 Collaplex
-License: AGPL-3.0-or-later
- 源码以 AGPL-3.0-or-later 发布, 全文见 /usr/share/collaplex-audio/LICENSE 。
- 闭源商用需商业授权, 见 /usr/share/collaplex-audio/LICENSING.md 。
+License: Apache-2.0
+ 本项目以 Apache-2.0 发布，允许商业使用；全文见 /usr/share/collaplex-rt/LICENSE，
+ 版权与第三方声明见 /usr/share/collaplex-rt/NOTICE。
 
-Files: hrir/*
+Files: assets/hrir/*
 Copyright: AudioLab, University of York
 License: Apache-2.0
- SADIE II 数据集 (受试者 H4), 允许商用, 保留其版权与许可声明。
+ SADIE II 数据集（受试者 H4），允许商用，保留其版权与许可声明。
  https://www.york.ac.uk/sadie-project/
 EOF
 
-# ---- 主命令 ----
-install -m 755 "$ROOT/bin/collaplex-audio" "$STAGE/usr/bin/collaplex-audio"
-
-# ---- control ----
 SIZE=$(du -sk "$STAGE/usr" | cut -f1)
 cat > "$STAGE/DEBIAN/control" <<EOF
-Package: collaplex-audio
+Package: collaplex-rt
 Version: ${VER}
-Architecture: all
+Architecture: amd64
 Maintainer: Collaplex <collaplex@localhost>
 Installed-Size: ${SIZE}
-Depends: python3 (>= 3.10), python3-numpy, python3-scipy, pipewire, wireplumber
+Depends: libc6, libgcc-s1, pipewire (>= 1.0), pipewire-bin, wireplumber, python3
 Section: sound
 Priority: optional
-Description: Collaplex 音效 — 全局音频的响度归一化 + 双耳 HRTF + 32 段 EQ + 房间混响
- 把系统输出接成一条链: 虚拟声卡 -> 响度归一化 -> 双耳 HRTF(含房间混响) -> 32 段 EQ + 总音量
- -> 数字输出。自带本地控制面板(双声道电平表 / 归一化电平与动态增益 / 湿度与总音量滑块 /
- 32 段 EQ + 10 个预设)。
+Description: Collaplex RT — 实时 HRTF + 影院 IR + 按片段 AGC
+ PipeWire convolver 负责 HRTF 和影院房间 IR、Rust DSP 负责 250 Hz 搁架、
+ 左右 8:2、按片段响度归一（干声锚点 + 房间传递模型 + 闭环响度上限）和 lookahead 限幅。
  .
- HRTF 用 SADIE II 真人数据集(约克大学, 受试者 H4, 96 kHz / 512 tap)。
- .
- 装完不会动你的系统音频: 手动跑 collaplex-audio start 才接管, stop 即还原。
+ 自带本地 Web 控制台（转盘/频谱/VU/示波器、实时参数）。装完不会自动接管，
+ 运行 collaplex-rt start 才启用，stop 即还原硬件输出。
 EOF
 
-# ---- 构建 ----
+(cd "$STAGE" && find usr -type f -exec md5sum {} + > DEBIAN/md5sums)
 dpkg-deb --root-owner-group --build "$STAGE" "$OUT/${PKG}.deb" >/dev/null
 echo "已生成: $OUT/${PKG}.deb"
-dpkg-deb --info "$OUT/${PKG}.deb" | sed -n '1,12p'
+dpkg-deb --info "$OUT/${PKG}.deb" | sed -n '1,14p'
 echo
 echo -n "大小: "; du -h "$OUT/${PKG}.deb" | cut -f1

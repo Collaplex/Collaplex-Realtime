@@ -1,0 +1,10 @@
+#!/bin/sh
+# Collaplex RT 干声间隙检测 wrapper（换片边界）
+export CX_RATE=96000
+export CX_DETECT=1
+export CX_GAP_SIDE=L
+export CX_GAP_DBFS=-50
+export CX_GAP_MS=200
+[ -f "${XDG_CONFIG_HOME:-$HOME/.config}/collaplex-rt/env" ] && \
+    . "${XDG_CONFIG_HOME:-$HOME/.config}/collaplex-rt/env"
+exec /usr/bin/collaplex-realtime "$@"
